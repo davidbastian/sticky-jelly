@@ -1,0 +1,46 @@
+{
+  "name": "sticky-jelly",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A soft-body creature that lives on your desktop. Grab it, stretch it, fling it \u2014 it sticks to the edges of your screen and peels off when you pull hard enough.",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "app": "electron desktop/main.cjs",
+    "start": "vite build && electron desktop/main.cjs",
+    "dist": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "lil-gui": "0.19.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "three": "0.160.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.160.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  },
+  "build": {
+    "appId": "black.davidbastian.stickyjelly",
+    "productName": "Sticky Jelly",
+    "files": [
+      "dist/**",
+      "desktop/**"
+    ],
+    "mac": {
+      "category": "public.app-category.entertainment",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.icns"
+    }
+  }
+}

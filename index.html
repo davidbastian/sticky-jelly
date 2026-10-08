@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sticky Jelly</title>
+    <style>
+      /*
+       * Nothing paints a background anywhere up the tree: the window is
+       * transparent, so any fill here would become an opaque rectangle sitting
+       * on the desktop. The creature's own canvas is the only thing drawn.
+       */
+      html, body, #root {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      /* The window is dragged by its creature, not by a title bar it does not
+         have — but a drag region would eat the pointer the jelly needs, so the
+         whole surface stays interactive and the shell does the moving. */
+      body { -webkit-user-select: none; user-select: none; }
+      /*
+       * The component sizes itself with Tailwind's w-screen/h-screen, which the
+       * site loads and this page does not. Rather than pull a framework in for
+       * two rules, the page gives its own child the viewport.
+       */
+      #root > div {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
