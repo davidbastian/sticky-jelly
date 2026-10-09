@@ -232,6 +232,29 @@ async function main() {
     win.destroy();
   }
 
+  // New chat: it eats the conversation. Only when asked for by name.
+  if (only.includes('eat')) {
+    win = await jellyWindow();
+    await settle();
+    c = center();
+    mouse(win, 'mouseMove', c.x, c.y);
+    mouse(win, 'mouseDown', c.x, c.y);
+    await wait(900);
+    mouse(win, 'mouseUp', c.x, c.y);
+    await wait(1800);
+    for (const q of ['Tell me a jelly joke', 'I feel a bit tired today, any ideas?']) {
+      await typeInto(win, q);
+      await pressEnter(win);
+      await wait(q.length * 45 + 4200);
+    }
+    stop = record(win, 'eat');
+    await wait(500);
+    await js(win, `[...document.querySelectorAll('.jelly-chat .goo-front button')].find(b => b.textContent === 'New chat').click()`);
+    await wait(2600);
+    await stop();
+    win.destroy();
+  }
+
   if (want('shapes')) {
     // 5 — shapes and colours: the blob, then the worm, through the palette.
     win = await jellyWindow();

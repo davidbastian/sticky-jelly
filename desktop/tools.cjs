@@ -102,6 +102,35 @@ const TOOLS = [
     },
   },
   {
+    name: 'open_url',
+    description: 'Open a web page (or a mailto: link) — in the default browser, or in a named one. Use it for anything that is a website rather than an installed app: YouTube, Gmail, Google, maps, a search on any site. Build the full URL yourself, e.g. https://www.youtube.com/results?search_query=lofi+beats or https://www.google.com/maps/search/coffee+near+me.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'A full http(s):// or mailto: URL.' },
+        browser: { type: 'string', enum: ['default', 'Safari', 'Google Chrome', 'Arc', 'Firefox', 'Microsoft Edge', 'Brave Browser'] },
+      },
+      required: ['url'], additionalProperties: false,
+    },
+    label: (i) => {
+      try { const u = new URL(i.url); return `Opening ${u.protocol === 'mailto:' ? 'an email' : u.hostname.replace(/^www\./, '')}`; } catch { return 'Opening a link'; }
+    },
+    check: (i) => {
+      try {
+        const u = new URL(i.url);
+        return ['http:', 'https:', 'mailto:'].includes(u.protocol) ? null : 'only http, https and mailto links';
+      } catch { return 'url must be a full URL'; }
+    },
+    async run(i) {
+      if (i.browser && i.browser !== 'default') {
+        try { await run('open', ['-a', i.browser, i.url]); return { opened: i.url, browser: i.browser }; }
+        catch { /* not installed: fall back to the default browser */ }
+      }
+      await shell.openExternal(i.url);
+      return { opened: i.url, browser: 'default' };
+    },
+  },
+  {
     name: 'open_path',
     description: 'Open a folder (in Finder) or a file (in its default app) inside the user\'s home folder. Paths can start with ~ or be relative to home, like "Downloads". Set reveal to show a file selected in Finder instead of opening it.',
     input_schema: {

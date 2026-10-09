@@ -9,7 +9,14 @@
 import type { Control } from './StickyJelly';
 
 interface Section { title: string; controls: Control[] }
-interface Assistant { hasKey: boolean; model: string; models: Record<string, string>; speak: boolean }
+type Provider = 'anthropic' | 'openai';
+interface Assistant {
+  provider: Provider;
+  providers: Record<Provider, string>;
+  hasKey: Record<'anthropic' | 'openai', boolean>;
+  model: string;
+  speak: boolean;
+}
 
 declare global {
   interface Window {
@@ -20,11 +27,13 @@ declare global {
       reset: () => Promise<void>;
       save: () => Promise<boolean>;
       onSchema: (fn: () => void) => void;
-      saveKey: (key: string) => Promise<boolean>;
-      removeKey: () => Promise<void>;
+      saveKey: (key: string, provider: Provider) => Promise<boolean>;
+      removeKey: (provider: Provider) => Promise<void>;
+      provider: (p: Provider) => void;
+      models: (p: Provider) => Promise<{ models: { id: string; name: string }[]; error?: string }>;
       model: (m: string) => void;
       speak: (on: boolean) => void;
-      openConsole: () => void;
+      openConsole: (provider: Provider) => void;
     };
   }
 }
@@ -35,7 +44,13 @@ const title = document.getElementById('title')!;
 
 let sections: Section[] = [];
 let icons = true;
-let assistant: Assistant = { hasKey: false, model: '', models: {}, speak: true };
+let assistant: Assistant = {
+  provider: 'anthropic',
+  providers: { anthropic: 'Claude (Anthropic)', openai: 'OpenAI' },
+  hasKey: { anthropic: false, openai: false },
+  model: '',
+  speak: true,
+};
 let current = 0;
 
 /* Enough decimals to show the step, no more. */
@@ -144,62 +159,99 @@ function desktopSection() {
  * never sees it again, only whether one is saved.
  */
 function assistantSection() {
+  const p = assistant.provider;
   const g = document.createElement('div');
   g.className = 'group';
 
-  const field = document.createElement('input');
-  field.type = 'password';
-  field.placeholder = assistant.hasKey ? 'Saved — paste a new key to replace it' : 'sk-ant-…';
-  field.autocomplete = 'off';
-  field.spellcheck = false;
-  field.setAttribute('aria-label', 'Anthropic API key');
-  field.className = 'key';
-  const save = document.createElement('button');
-  save.textContent = 'Save';
-  save.className = 'small';
-  const keyRow = row('API key', field, save);
-  const store = async () => {
-    if (!field.value.trim()) return;
-    await window.settings.saveKey(field.value);
-    field.value = '';
+  // Which brain: Claude or OpenAI.
+  const prov = document.createElement('select');
+  prov.setAttribute('aria-label', 'Provider');
+  for (const [id, name] of Object.entries(assistant.providers)) prov.add(new Option(name, id, false, id === p));
+  prov.addEventListener('change', async () => {
+    window.settings.provider(prov.value as Provider);
     await load();
-  };
-  save.addEventListener('click', store);
-  field.addEventListener('keydown', (e) => { if (e.key === 'Enter') store(); });
+  });
+  g.append(row('Provider', prov));
 
-  const status = document.createElement('span');
-  status.className = 'status';
-  status.textContent = assistant.hasKey ? 'Saved in your Keychain' : 'No key yet';
-  const statusRow = row('Status', status);
-  if (assistant.hasKey) {
-    const remove = document.createElement('button');
-    remove.textContent = 'Remove';
-    remove.className = 'small';
-    remove.addEventListener('click', async () => { await window.settings.removeKey(); await load(); });
-    statusRow.append(remove);
+  // The key.
+  {
+    const has = assistant.hasKey[p];
+    const field = document.createElement('input');
+    field.type = 'password';
+    field.placeholder = has ? 'Saved — paste a new key to replace it' : p === 'anthropic' ? 'sk-ant-…' : 'sk-…';
+    field.autocomplete = 'off';
+    field.spellcheck = false;
+    field.setAttribute('aria-label', `${assistant.providers[p]} API key`);
+    field.className = 'key';
+    const save = document.createElement('button');
+    save.textContent = 'Save';
+    save.className = 'small';
+    const store = async () => {
+      if (!field.value.trim()) return;
+      await window.settings.saveKey(field.value, p);
+      field.value = '';
+      await load();
+    };
+    save.addEventListener('click', store);
+    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') store(); });
+
+    const status = document.createElement('span');
+    status.className = 'status';
+    status.textContent = has ? 'Saved in your Keychain' : 'No key yet';
+    const statusRow = row('Status', status);
+    if (has) {
+      const remove = document.createElement('button');
+      remove.textContent = 'Remove';
+      remove.className = 'small';
+      remove.addEventListener('click', async () => { await window.settings.removeKey(p); await load(); });
+      statusRow.append(remove);
+    }
+    g.append(row('API key', field, save), statusRow);
   }
 
+  // The models: Claude's list, or the OpenAI models your key can use.
   const sel = document.createElement('select');
   sel.setAttribute('aria-label', 'Model');
-  for (const [id, name] of Object.entries(assistant.models)) sel.add(new Option(name, id, false, id === assistant.model));
+  sel.add(new Option('Loading…', ''));
+  sel.disabled = true;
   sel.addEventListener('change', () => { assistant.model = sel.value; window.settings.model(sel.value); });
+  g.append(row('Model', sel));
 
   const talk = toggle(assistant.speak, 'Talk back when I talk to it', (on) => {
     assistant.speak = on;
     window.settings.speak(on);
   });
+  g.append(row('Talk back when I talk to it', talk));
 
-  g.append(keyRow, statusRow, row('Model', sel), row('Talk back when I talk to it', talk));
+  const problem = document.createElement('p');
+  problem.className = 'note';
+  problem.hidden = true;
+
+  window.settings.models(p).then(({ models, error }) => {
+    sel.replaceChildren();
+    for (const m of models) sel.add(new Option(m.name, m.id, false, m.id === assistant.model));
+    if (!models.length) sel.add(new Option('No models', ''));
+    sel.disabled = !models.length;
+    // Nothing chosen yet: the first one is what the chat will use.
+    if (models.length && !models.some(m => m.id === assistant.model)) sel.value = models[0].id;
+    if (error) { problem.textContent = error; problem.hidden = false; }
+  });
 
   const note = document.createElement('p');
   note.className = 'note';
-  note.append('Press and hold the jelly to chat — type, or press the microphone and talk (speech is recognised on your Mac). Uses your own Anthropic API key, billed per message to your account; Haiku is the cheapest. ');
+  note.append('Press and hold the jelly to chat — type, or press the microphone and talk (speech is recognised on your Mac). ');
   const link = document.createElement('a');
   link.href = '#';
-  link.textContent = 'Get a key in the Anthropic Console';
-  link.addEventListener('click', (e) => { e.preventDefault(); window.settings.openConsole(); });
-  note.append(link, '.');
-  return [g, note];
+  link.addEventListener('click', (e) => { e.preventDefault(); window.settings.openConsole(p); });
+  if (p === 'anthropic') {
+    note.append('Uses your own Anthropic API key, billed per message to your account; Haiku is the cheapest. ');
+    link.textContent = 'Get a key in the Anthropic Console';
+  } else {
+    note.append('Uses your own OpenAI API key, billed per message to your OpenAI account. Web search is Claude-only. ');
+    link.textContent = 'Get a key from OpenAI';
+  }
+  note.append(link, '. Changing provider starts a new chat.');
+  return [g, problem, note];
 }
 
 function render() {

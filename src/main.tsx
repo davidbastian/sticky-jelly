@@ -14,12 +14,12 @@
  *   onSidebar     press and hold, and it stretches into a sidebar with a chat
  *                 on it
  */
-import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import StickyJelly, {
   type Rect, type SettingsBridge, type SidebarControl, type SidebarState,
 } from './StickyJelly';
-import Chat, { type VoiceApi } from './Chat';
+import Chat, { type Face, type VoiceApi } from './Chat';
 
 declare global {
   interface Window {
@@ -61,6 +61,11 @@ function Desktop() {
   const talking = useCallback((on: boolean) => control.current?.setTalking(on), []);
   const act = useCallback((kind: Parameters<SidebarControl['act']>[0]) => control.current?.act(kind), []);
   const sound = useCallback((kind: Parameters<SidebarControl['sound']>[0]) => control.current?.sound(kind), []);
+  const face = useMemo<Face>(() => ({
+    gape: (open) => control.current?.setGape(open),
+    mouth: () => control.current?.mouth(),
+    gulp: () => control.current?.gulp(),
+  }), []);
 
   const api = window.jelly?.chat;
   return (
@@ -79,6 +84,7 @@ function Desktop() {
           state={sidebar}
           api={api}
           voice={window.jelly?.voice}
+          face={face}
           onClose={close}
           onFaceTop={faceTop}
           onTalking={talking}

@@ -99,10 +99,18 @@ function ink(hex: string) {
     : { text: '#111113', soft: 'rgba(0,0,0,0.5)', fill: 'rgba(0,0,0,0.07)', line: 'rgba(0,0,0,0.14)' };
 }
 
-export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking, onAction, onSound }: {
+/* The jelly's face, for the chat to eat with. */
+export interface Face {
+  gape: (open: number | null) => void;
+  mouth: () => { x: number; y: number } | undefined;
+  gulp: () => void;
+}
+
+export default function Chat({ state, api, voice, face, onClose, onFaceTop, onTalking, onAction, onSound }: {
   state: SidebarState;
   api: ChatApi;
   voice?: VoiceApi;
+  face?: Face;
   onClose: () => void;
   onFaceTop: (top: boolean) => void;
   onTalking?: (on: boolean) => void;
@@ -336,12 +344,14 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
   }
 
   /*
-   * New chat: it eats the conversation. Every message is sucked up into its
-   * mouth, top first, shrinking and spinning as it goes, while it chomps —
-   * then a gulp, and the page is clean.
+   * New chat: it eats the conversation. The mouth opens wide with a slurp;
+   * the messages, nearest first, are pulled toward it — a tug, then
+   * stretched thin like something drawn up a straw — and vanish into it, the
+   * mouth chomping shut on each one; then a gulp, the body swells as it
+   * swallows, and the page is clean.
    */
   const [eating, setEating] = useState(false);
-  function newChat() {
+  async function newChat() {
     if (eating) return;
     stopAll();
     api.reset();
@@ -353,27 +363,52 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
       input.current?.focus();
       return;
     }
-    // Where the mouth is, relative to each message.
+    const wait = (ms: number) => new Promise(r => window.setTimeout(r, ms));
+    const lb = log!.getBoundingClientRect();
     const rootBox = log!.closest('.jelly-chat')!.getBoundingClientRect();
-    const mouth = { x: rootBox.left + rootBox.width / 2, y: rootBox.top + FACE_TOP + 30 };
-    const visible = rows.filter(r => { const b = r.getBoundingClientRect(); const lb = log!.getBoundingClientRect(); return b.bottom > lb.top && b.top < lb.bottom; });
-    visible.forEach((r, k) => {
-      const b = r.getBoundingClientRect();
-      r.style.setProperty('--dx', `${mouth.x - (b.left + b.width / 2)}px`);
-      r.style.setProperty('--dy', `${mouth.y - (b.top + b.height / 2)}px`);
-      r.style.setProperty('--spin', `${(k % 2 ? 1 : -1) * (90 + Math.random() * 120)}deg`);
-      r.style.animationDelay = `${k * 0.07}s`;
-      window.setTimeout(() => onSound?.('munch'), k * 70 + 260);
-    });
+    const mouth = face?.mouth() ?? { x: rootBox.left + rootBox.width / 2, y: rootBox.top + FACE_TOP + 30 };
+    const visible = rows
+      .filter(r => { const b = r.getBoundingClientRect(); return b.bottom > lb.top && b.top < lb.bottom; })
+      .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    // Anything scrolled out of sight just goes; only what you can see is eaten.
+    rows.forEach(r => { if (!visible.includes(r)) r.style.visibility = 'hidden'; });
+
     setEating(true);
-    onTalking?.(true);
-    window.setTimeout(() => {
-      onTalking?.(false);
-      onSound?.('gulp');
-      setLines([]);
-      setEating(false);
-      input.current?.focus();
-    }, Math.min(1400, visible.length * 70 + 560));
+    face?.gape(1);
+    onSound?.('slurp');
+    await wait(240);
+
+    const gap = Math.min(280, 1500 / visible.length);
+    await Promise.all(visible.map(async (r, k) => {
+      await wait(k * gap);
+      const b = r.getBoundingClientRect();
+      const dx = mouth.x - (b.left + b.width / 2);
+      const dy = mouth.y - b.top;
+      r.style.transformOrigin = '50% 0%';   // stretch from the end nearest the mouth
+      const a = r.animate([
+        { transform: 'none', opacity: 1, filter: 'blur(0)' },
+        { transform: `translate(${dx * 0.06}px, ${dy * 0.06}px) scale(1.05, 0.88)`, offset: 0.18 },
+        { transform: `translate(${dx * 0.55}px, ${dy * 0.55}px) scale(0.5, 1.4)`, offset: 0.62, filter: 'blur(0.4px)' },
+        { transform: `translate(${dx}px, ${dy}px) scale(0.04, 0.5)`, opacity: 0.15, filter: 'blur(1.5px)' },
+      ], { duration: 680, easing: 'cubic-bezier(0.5, 0, 0.85, 0.5)', fill: 'forwards' });
+      await a.finished;
+      r.style.visibility = 'hidden';
+      // A chomp on every mouthful.
+      face?.gape(0.2);
+      onSound?.('munch');
+      await wait(110);
+      face?.gape(1);
+    }));
+
+    face?.gape(0);
+    await wait(120);
+    face?.gulp();
+    onSound?.('gulp');
+    setLines([]);
+    setEating(false);
+    await wait(250);
+    face?.gape(null);
+    input.current?.focus();
   }
 
   const empty = lines.length === 0;
@@ -951,16 +986,8 @@ const GOO_CSS = `
 .jelly-chat .card-answer { font-size: 12px; opacity: 0.6; text-align: right; }
 .jelly-chat .card-is-no { opacity: 0.55; }
 
-/* Eaten: every message is pulled into the mouth, shrinking and spinning. */
+/* While it eats, the messages may leave the list on their way to the mouth. */
 .jelly-chat .log.eating { overflow: visible; -webkit-mask-image: none; mask-image: none; }
-.jelly-chat .log.eating > * {
-  animation: jelly-eaten 0.55s cubic-bezier(0.55, 0, 0.8, 0.4) both !important;
-}
-@keyframes jelly-eaten {
-  0%   { transform: none; opacity: 1; }
-  25%  { transform: translate(calc(var(--dx) * -0.04), calc(var(--dy) * -0.04)) scale(1.05, 0.92); opacity: 1; }
-  100% { transform: translate(var(--dx), var(--dy)) scale(0.04) rotate(var(--spin)); opacity: 0.2; }
-}
 
 @keyframes jelly-send {
   0%   { translate: 0 0; scale: 1 1; }

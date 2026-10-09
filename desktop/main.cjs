@@ -157,28 +157,48 @@ ipcMain.handle('settings:get', () => ({
   schema,
   icons: icons.enabled,
   assistant: {
-    hasKey: assistant.hasKey(),
-    model: saved.__model || assistant.defaultModel,
+    provider: providerNow(),
+    providers: assistant.providers,
+    hasKey: { anthropic: assistant.hasKey('anthropic'), openai: assistant.hasKey('openai') },
+    model: saved[`__model_${providerNow()}`] || '',
     speak: saved.__speak !== false,
-    models: assistant.models,
   },
 }));
-ipcMain.handle('settings:key', (_e, key) => {
-  if (typeof key !== 'string' || !key.trim()) return false;
-  assistant.saveKey(key);
+/* Which provider and model the chat uses; Claude Haiku until chosen. */
+const providerNow = () => (assistant.providers[saved.__provider] ? saved.__provider : 'anthropic');
+async function modelNow(provider) {
+  const chosen = saved[`__model_${provider}`] || (provider === 'anthropic' ? saved.__model : '');
+  if (chosen) return chosen;
+  if (provider === 'anthropic') return assistant.defaultModel;
+  const { models } = await assistant.listModels(provider);
+  return models[0]?.id || '';
+}
+ipcMain.handle('settings:models', (_e, provider) => assistant.listModels(assistant.providers[provider] ? provider : 'anthropic'));
+ipcMain.on('settings:provider', (_e, provider) => {
+  if (!assistant.providers[provider]) return;
+  saved.__provider = provider;
+  saveSettings();
+});
+ipcMain.handle('settings:key', (_e, key, provider = 'anthropic') => {
+  if (typeof key !== 'string' || !key.trim() || !['anthropic', 'openai'].includes(provider)) return false;
+  assistant.saveKey(key, provider);
   return true;
 });
-ipcMain.handle('settings:key-remove', () => { assistant.removeKey(); });
+ipcMain.handle('settings:key-remove', (_e, provider = 'anthropic') => { assistant.removeKey(provider); });
 ipcMain.on('settings:speak', (_e, on) => {
   saved.__speak = !!on;
   saveSettings();
 });
 ipcMain.on('settings:model', (_e, model) => {
-  if (!assistant.models[model]) return;
-  saved.__model = model;
+  if (typeof model !== 'string' || !model) return;
+  saved[`__model_${providerNow()}`] = model;
   saveSettings();
 });
-ipcMain.on('settings:console', () => shell.openExternal('https://console.anthropic.com/settings/keys'));
+const CONSOLES = {
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  openai: 'https://platform.openai.com/api-keys',
+};
+ipcMain.on('settings:console', (_e, provider) => shell.openExternal(CONSOLES[provider] || CONSOLES.anthropic));
 
 /*
  * The chat. One turn at a time: text streams back to the jelly window as it
@@ -200,11 +220,13 @@ ipcMain.on('chat:confirm-reply', (_e, id, ok) => {
   if (resolve) { approvals.delete(id); resolve(!!ok); }
 });
 
-ipcMain.handle('chat:send', (e, text) => {
+ipcMain.handle('chat:send', async (e, text) => {
   if (typeof text !== 'string' || !text.trim()) return { error: 'Nothing to send.' };
-  const model = saved.__model || assistant.defaultModel;
+  const provider = providerNow();
+  const model = await modelNow(provider);
+  if (!model) return { error: 'Pick a model in Settings › Assistant.' };
   const send = (channel, payload) => { if (!e.sender.isDestroyed()) e.sender.send(channel, payload); };
-  return assistant.send(text, model, {
+  return assistant.send(text, { provider, model }, {
     onDelta: (delta) => send('chat:delta', delta),
     onTool: (t) => send('chat:tool', t),
     confirm: (plan) => new Promise((resolve) => {
@@ -360,7 +382,12 @@ app.whenReady().then(() => {
     if (!dockIcon.isEmpty()) app.dock.setIcon(dockIcon);
   }
   loadSettings();
-  assistant = createAssistant({ keyPath: path.join(app.getPath('userData'), 'anthropic-key.bin') });
+  assistant = createAssistant({
+    keyPaths: {
+      anthropic: path.join(app.getPath('userData'), 'anthropic-key.bin'),
+      openai: path.join(app.getPath('userData'), 'openai-key.bin'),
+    },
+  });
   icons = createIconMover({
     storePath: path.join(app.getPath('userData'), 'displaced-icons.json'),
     getArea: () => screen.getPrimaryDisplay().workArea,

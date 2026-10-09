@@ -81,9 +81,15 @@ export interface SidebarControl {
   act: (kind: JellyAction) => void;
   /* A sound from the chat, through the jelly's own (Settings › Sound) mix. */
   sound: (kind: ChatSound) => void;
+  /* Hold the mouth open (0–1), or let it go back to talking (null). */
+  setGape: (open: number | null) => void;
+  /* Where the mouth is, in page coordinates. */
+  mouth: () => { x: number; y: number };
+  /* A swallow: the body swells for a moment. */
+  gulp: () => void;
 }
 
-export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | 'munch' | 'gulp' | JellyAction;
+export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | 'munch' | 'gulp' | 'slurp' | JellyAction;
 
 export type JellyAction = 'wiggle' | 'bounce' | 'blush' | 'spin' | 'shiver' | 'melt';
 
@@ -490,6 +496,9 @@ export default function StickyJellyProject({
     // Talking: the mouth flaps toward a new random openness every few
     // hundredths of a second, sprung so it reads as chatter, not flicker.
     let talking = false, talkOpen = 0, talkGoal = 0, talkNext = 0;
+    let gape: number | null = null;   // held open (eating), overriding the chatter
+    let gulpLeft = 0;                 // seconds left of a swallow's swell
+    let mouthAt = { x: 0, y: 0 };     // last drawn mouth centre, device px
     // An action in progress: what, and how much of it is left (seconds).
     let actKind: JellyAction | '' = '', actLeft = 0;
     const actAmp = () => (actKind ? Math.max(0, actLeft / ACT_LEN[actKind]) : 0);
@@ -786,6 +795,24 @@ export default function StickyJellyProject({
           // One mouthful: a soft, low, slightly squelchy chomp.
           tone({ type: 'triangle', f0: 210 + Math.random() * 90, f1: 120, dur: 0.09, vol: 0.3, lp: 900 });
           break;
+        case 'slurp': {
+          // Breath drawn in through a straw: filtered noise rising, wobbling.
+          const t0 = audioCtx.currentTime;
+          const src = audioCtx.createBufferSource(); src.buffer = noiseBuf;
+          const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 6;
+          bp.frequency.setValueAtTime(380, t0);
+          bp.frequency.exponentialRampToValueAtTime(1500, t0 + 0.9);
+          const g = audioCtx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.32 * cfg.sndChat, t0 + 0.15);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0);
+          const lfo = audioCtx.createOscillator(); const d = audioCtx.createGain();
+          lfo.frequency.value = 11; d.gain.value = 0.12 * cfg.sndChat;
+          lfo.connect(d); d.connect(g.gain);
+          src.connect(bp); bp.connect(g); g.connect(master);
+          src.start(t0); src.stop(t0 + 1.05); lfo.start(t0); lfo.stop(t0 + 1.05);
+          break;
+        }
         case 'gulp':
           tone({ f0: 300, f1: 85, dur: 0.3, vol: 0.45, lp: 700 });
           tone({ f0: 900, f1: 1300, dur: 0.08, vol: 0.15, at: 0.3 });
@@ -909,12 +936,42 @@ export default function StickyJellyProject({
           bp.frequency.exponentialRampToValueAtTime(1900, t + 0.05);
           bp.Q.value = 4;
           const g = audioCtx.createGain();
-          g.gain.setValueAtTime(vol * 0.4, t);
+          g.gain.setValueAtTime(vol * 0.55, t);
           g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
           src.connect(bp); bp.connect(g); g.connect(master);
           src.start(t, Math.random(), 0.07);
         }
       }
+    };
+
+    /*
+     * Coming right off the glass: a suction cup letting go. A low thump, a
+     * sharp click, a puff of air rushing in and a little squeak — bigger the
+     * more of it was stuck and the longer it held.
+     */
+    const playDetach = (strength: number) => {
+      if (!audioCtx || !noiseBuf || !cfg.sndOn || cfg.sndPeel <= 0) return;
+      const t = audioCtx.currentTime;
+      const v = cfg.sndPeel * (0.5 + strength * 0.9);
+      toneBurst(t, 0.2, 'sine', 170, 52, v * 0.7);
+      noiseBurst(t, 0.014, 'highpass', 2600, 2600, 0.7, v * 0.5);
+      noiseBurst(t + 0.008, 0.13, 'bandpass', 700, 3200, 1.6, v * 0.35);
+      toneBurst(t + 0.03, 0.09, 'triangle', 1500, 950, v * 0.12);
+    };
+    // How stuck it is, to know when it comes fully free.
+    let stuckWas = 0, stuckMost = 0, stuckFrom = 0;
+    const trackDetach = (now: number) => {
+      let stuck = 0;
+      for (const p of pts) if (p.stuck) stuck++;
+      if (stuck && !stuckWas) { stuckFrom = now; stuckMost = 0; }
+      stuckMost = Math.max(stuckMost, stuck);
+      // All the way off — by being pulled, not by settling or a rebuild.
+      if (!stuck && stuckWas && peelNew > 0 && !side) {
+        const held = Math.min(1, (now - stuckFrom) / 1500);
+        const grip = Math.min(1, stuckMost / Math.max(4, pts.length * 0.3));
+        if (stuckMost >= 3 && now - stuckFrom > 250) playDetach(grip * 0.6 + held * 0.4);
+      }
+      stuckWas = stuck;
     };
 
     // Per-frame physics event accumulators consumed by the audio layer
@@ -1065,8 +1122,12 @@ export default function StickyJellyProject({
           const p = pts[i], t = sideTargets[i];
           if (!t) continue;
           const k = 0.05 * (1 - melting * 0.85);
-          p.x += (t.x - p.x) * k;
-          p.y += (t.y - p.y) * k;
+          // A swallow pushes the outline out for a moment, then lets it back.
+          const swell = gulpLeft > 0 ? Math.sin((gulpLeft / 0.45) * Math.PI) * 0.06 : 0;
+          const tx = t.x + (t.x - (side.x0 + side.x1) / 2) * swell;
+          const ty = t.y + (t.y - (side.y0 + side.y1) / 2) * swell * 0.4;
+          p.x += (tx - p.x) * k;
+          p.y += (ty - p.y) * k;
         }
       }
 
@@ -1271,7 +1332,9 @@ export default function StickyJellyProject({
       tfX += tfVx * dt;
       tfY += tfVy * dt;
 
-      if (talking && side) {
+      if (gape !== null && side) {
+        talkGoal = gape;
+      } else if (talking && side) {
         if ((talkNext -= dt) <= 0) {
           talkGoal = 0.15 + Math.random() * 0.85;
           talkNext = 0.05 + Math.random() * 0.09;
@@ -1404,9 +1467,11 @@ export default function StickyJellyProject({
         mouthMesh.visible = true;
         mouthMesh.position.x = facX;
         mouthMesh.position.y = facY + ey + eyeR + R * 0.18;
-        const mr = eyeR * 0.85;
-        mouthMesh.scale.set(mr * (1.1 - talkOpen * 0.3), mr * talkOpen, 1);
+        // Talking flaps; eating gapes — wider and taller than any word.
+        const mr = eyeR * (gape !== null ? 1.15 : 0.85);
+        mouthMesh.scale.set(mr * (1.1 - talkOpen * 0.3) * (gape !== null ? 1.6 : 1), mr * talkOpen * (gape !== null ? 2.1 : 1), 1);
       }
+      mouthAt = { x: facX, y: facY + ey + eyeR + R * 0.18 };
     };
 
     // ── Loop ─────────────────────────────────────────────────────────────────
@@ -1440,6 +1505,7 @@ export default function StickyJellyProject({
         master.gain.setTargetAtTime(cfg.sndOn ? cfg.sndVolume : 0, t, 0.05);
         if (stickNew > 0) playSplat(Math.min(1, stickImpact / (6 * dpr)));
         if (peelNew > 0) playPeel();
+        trackDetach(now);
         // Stretch sound: tension = how far past rest the dragged point's
         // neighbour springs are stretched; the style decides how it sounds.
         let tension = 0;
@@ -1517,6 +1583,7 @@ export default function StickyJellyProject({
         mouthMesh.visible = false;
       }
       if (actKind && (actLeft -= dt) <= 0) { actKind = ''; actLeft = 0; }
+      if (gulpLeft > 0) gulpLeft = Math.max(0, gulpLeft - dt);
       // Builds while held; let go (or burst) and it settles back over ~¼s.
       charge = holdAt ? Math.min(1, (now - holdAt) / HOLD_MS) : Math.max(0, charge - dt * 4);
       humUpdate(charge, !!holdAt);
@@ -1624,6 +1691,7 @@ export default function StickyJellyProject({
       chatSound('close');
       side = null;
       talking = false;
+      gape = null;
       sideState = null;
       sideTargets = [];
       restEdge = sideSaved.restEdge;
@@ -1637,6 +1705,12 @@ export default function StickyJellyProject({
       dismiss,
       setFaceTop: (top) => { faceTop = top; },
       setTalking: (on) => { talking = on; },
+      setGape: (open) => { gape = open; },
+      mouth: () => {
+        const at = canvas.getBoundingClientRect();
+        return { x: at.left + mouthAt.x / dpr, y: at.top + mouthAt.y / dpr };
+      },
+      gulp: () => { gulpLeft = 0.45; },
       sound: chatSound,
       act: (kind) => {
         actKind = kind;

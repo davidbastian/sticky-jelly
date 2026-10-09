@@ -27,7 +27,7 @@ Everywhere you are not touching it, your desktop works normally — the window o
 
 Every point on the body grabs the edge it touches and holds until the pull beats its stickiness, then lets go one point at a time — so peeling it off a corner feels like peeling, not like a release.
 
-It has moods: every few seconds the face changes — teeth, an arc of extra eyes, a cyclops, sleepy lids, a surprised O. The eyes follow your cursor a little late. It splats when it lands, pops as it peels, creaks while you stretch it and squeaks like a wet finger on glass when it slides along an edge — all synthesised; there are no audio files in here.
+It has moods: every few seconds the face changes — teeth, an arc of extra eyes, a cyclops, sleepy lids, a surprised O. The eyes follow your cursor a little late. It splats when it lands, pops as it peels — with a proper suction-cup *thwuck* when it comes right off the glass — creaks while you stretch it and squeaks like a wet finger on glass when it slides along an edge — all synthesised; there are no audio files in here.
 
 ## Hold it to open the chat
 
@@ -56,6 +56,7 @@ When it writes an action — *wiggles*, *bounces*, *blushes*, *spins*, *shivers*
 Ask, and it does it — each step shows up in the chat as it happens:
 
 - **Apps, folders and files** — "open Figma", "show me my Downloads", "open the last PDF I downloaded".
+- **Websites** — "open YouTube and find lo-fi music", "open Gmail in Chrome", "search Google Maps for coffee nearby". Anything that's a website rather than an app opens in your browser (or the one you name).
 - **Finding things** — "where's the Moët deck?", "screenshots from this week" (Spotlight, newest first).
 - **Tidying up** — "sort my Desktop into folders by type", "put the screenshots in a Screenshots folder".
 - **Your calendar and reminders** — "what's on tomorrow?", "add lunch with Ana on Friday at 1", "remind me to call the studio at 5".
@@ -64,7 +65,7 @@ Ask, and it does it — each step shows up in the chat as it happens:
 
 Anything that changes something — moving files, adding an event or a reminder — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. macOS asks once for Calendars and Reminders the first time they're used.
 
-**New chat** clears the slate in the most jelly way: it eats the conversation, every message sucked up into its mouth with a munch, and a gulp at the end.
+**New chat** clears the slate in the most jelly way: it opens wide with a slurp and eats the conversation — each message tugged, stretched thin and sucked into its mouth, a chomp on every mouthful — then gulps, swelling as it swallows.
 
 ## Talk to it
 
@@ -94,13 +95,13 @@ Everything lives in a real Settings window — from the jelly icon in the menu b
 
 ### Your API key
 
-The chat runs on Claude, through your own Anthropic API key. Billing is per message to your Anthropic account, separate from any Claude subscription.
+The chat runs on **Claude** by default, through your own Anthropic API key — or on **OpenAI**, through yours: pick the provider in Settings › Assistant (changing it starts a new chat; web search is Claude-only). Billing is per message to that account, separate from any subscription.
 
 1. Sign in at [console.anthropic.com](https://console.anthropic.com), add a little credit under **Billing**, and create a key under **API Keys**.
 2. Open **Settings › Assistant**, paste the key and press **Save**. It is stored encrypted in your Keychain and only ever sent to Anthropic.
 3. To change it, paste a new one over it and press **Save**. To take it out, press **Remove**.
 
-Pick the model in the same place. **Claude Haiku 5.5** is the default and the cheapest — roughly a twentieth of a cent a message. **Sonnet 5.5** and **Opus 5.5** are smarter and cost more.
+Pick the model in the same place. **Claude Haiku 5.5** is the default and the cheapest — roughly a twentieth of a cent a message. **Sonnet 5.5** and **Opus 5.5** are smarter and cost more. With OpenAI, the list shows the chat models your key can use. An OpenAI key goes in the same way (from [platform.openai.com](https://platform.openai.com/api-keys)).
 
 ## The desktop part
 

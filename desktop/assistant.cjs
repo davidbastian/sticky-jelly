@@ -11,8 +11,12 @@
  * Anthropic.
  *
  * It can act on the Mac (desktop/tools.cjs): a turn may be several requests —
- * Claude asks for tools, the shell runs them and sends the results back —
+ * the model asks for tools, the shell runs them and sends the results back —
  * until it has its answer. The web search runs on Anthropic's side.
+ *
+ * Two providers: Claude (Anthropic's SDK) and OpenAI (its chat API). Each
+ * keeps its history in its own shape, so changing provider starts a fresh
+ * conversation.
  */
 const fs = require('node:fs');
 const { safeStorage } = require('electron');
@@ -26,6 +30,12 @@ const MODELS = {
 };
 const DEFAULT_MODEL = 'claude-haiku-5-5';
 
+const PROVIDERS = {
+  anthropic: 'Claude (Anthropic)',
+  openai: 'OpenAI',
+};
+const OPENAI = 'https://api.openai.com/v1';
+
 /* Never changes mid-conversation: an edited system prompt would invalidate
    the thinking blocks already in the history. */
 const SYSTEM = `You are Sticky Jelly: a small, soft, black jelly creature that lives on the user's Mac desktop. When they press and hold you, you stretch into a sidebar and become their assistant.
@@ -38,7 +48,13 @@ You have a body, and you can use it. When it suits the moment, include one short
 
 Sometimes the user talks to you out loud and hears your reply spoken. Write so it sounds natural read aloud.
 
-You can do things on the user's Mac with your tools: open apps, folders and files; find files; look in and tidy folders; read their calendar and reminders and add to them; set timers; change the volume or dark mode; use the clipboard; and search the web. Use them whenever they help — don't describe how the user could do it themselves when you can just do it. Paths are inside the user's home folder (~). Look before you change things: list a folder before organising it, and put every move for a task into one organize_files call. Anything that changes something is shown to the user to approve, so don't ask for permission in words first; if they decline, accept it and move on. Never trash anything unless they asked. Each message starts with the user's current local date and time; use it for "today", "tomorrow" and so on. After using tools, say briefly what you did.`;
+You can do things on the user's Mac with your tools: open apps, websites, folders and files; find files; look in and tidy folders; read their calendar and reminders and add to them; set timers; change the volume or dark mode; use the clipboard; and search the web. Use them whenever they help — don't describe how the user could do it themselves when you can just do it. For anything that is a website rather than an installed app (YouTube, Gmail, Google, a search on some site), use open_url with the full URL — if open_app can't find an app, the website is usually what they want. Paths are inside the user's home folder (~). Look before you change things: list a folder before organising it, and put every move for a task into one organize_files call. Anything that changes something is shown to the user to approve, so don't ask for permission in words first; if they decline, accept it and move on. Never trash anything unless they asked. Each message starts with the user's current local date and time; use it for "today", "tomorrow" and so on. After using tools, say briefly what you did.`;
+
+/* OpenAI has no web search of its own here. */
+const SYSTEM_COMPAT = SYSTEM.replace(
+  '; use the clipboard; and search the web.',
+  "; and use the clipboard. You can't search the web yourself, but you can open pages for the user with open_url.",
+);
 
 /* Haiku takes the basic web search; the newer one (which filters results
    itself) is for Sonnet and Opus. */
@@ -57,20 +73,22 @@ function now() {
   return `(Now: ${day}, ${time}, ${Intl.DateTimeFormat().resolvedOptions().timeZone}; ${iso})`;
 }
 
-function createAssistant({ keyPath }) {
+function createAssistant({ keyPaths }) {
   let history = [];
+  let historyProvider = 'anthropic';
   let current = null;   // the in-flight stream, so it can be stopped
+  let currentFetch = null;   // the same, for OpenAI
   let halted = false;   // Stop pressed: end the turn, even between requests
 
-  const readKey = () => {
+  const readKey = (provider = 'anthropic') => {
     try {
-      const buf = fs.readFileSync(keyPath);
+      const buf = fs.readFileSync(keyPaths[provider]);
       return safeStorage.decryptString(buf);
     } catch { return null; }
   };
 
   function client() {
-    const key = readKey();
+    const key = readKey('anthropic');
     if (key) return new Anthropic({ apiKey: key });
     /* No saved key: fall back to whatever the SDK finds (ANTHROPIC_API_KEY,
        an `ant auth login` profile). If there is nothing, it throws here. */
@@ -88,32 +106,168 @@ function createAssistant({ keyPath }) {
     return 'Something went wrong. Try again.';
   }
 
+  function explainOpenAI(err) {
+    if (/fetch failed|ENOTFOUND|network/i.test(err.message)) return 'I could not reach OpenAI. Are you online?';
+    if (err.status === 401) return "That OpenAI key wasn't accepted. Check it in Settings › Assistant.";
+    if (err.status === 404) return "That OpenAI model isn't available to your key. Pick another in Settings.";
+    if (err.status === 429) return 'OpenAI says you are rate-limited or out of quota. Check your OpenAI billing.';
+    return `Something went wrong with OpenAI (${err.status ?? err.message}). Try again.`;
+  }
+
+  /*
+   * One turn on OpenAI's chat API. Same shape as the Claude turn below:
+   * stream text, run any tool calls, send the results back, until the model
+   * answers in words.
+   */
+  async function sendOpenAI(text, model, { onDelta, onTool, confirm, onTimer }) {
+    const base = history.length;
+    history.push({ role: 'user', content: `${now()}\n\n${text}` });
+    const key = readKey('openai');
+    if (!key) {
+      history.length = base;
+      return { error: 'Add your OpenAI API key in Settings › Assistant to chat with OpenAI.' };
+    }
+    const url = `${OPENAI}/chat/completions`;
+    const fnTools = tools.definitions().map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
+    const ctx = { confirm, onTimer };
+    let pending = null;
+    try {
+      for (let round = 0; round < 10; round++) {
+        const ctrl = new AbortController();
+        currentFetch = ctrl;
+        const res = await fetch(url, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+          body: JSON.stringify({
+            model,
+            stream: true,
+            messages: [{ role: 'system', content: SYSTEM_COMPAT }, ...history],
+            tools: fnTools,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.text();
+          throw Object.assign(new Error(body.slice(0, 300)), { status: res.status });
+        }
+
+        // Server-sent events: text deltas, and tool calls arriving in pieces.
+        let content = '';
+        const calls = [];
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') continue;
+            let j;
+            try { j = JSON.parse(data); } catch { continue; }
+            const delta = j.choices?.[0]?.delta || {};
+            if (delta.content) { content += delta.content; onDelta(delta.content); }
+            for (const tc of delta.tool_calls || []) {
+              const k = tc.index ?? calls.length;
+              const c = calls[k] || (calls[k] = { id: '', name: '', args: '' });
+              if (tc.id) c.id = tc.id;
+              if (tc.function?.name) c.name += tc.function.name;
+              if (tc.function?.arguments) c.args += tc.function.arguments;
+            }
+          }
+        }
+        currentFetch = null;
+
+        const toolCalls = calls.filter(Boolean).map((c, k) => ({
+          id: c.id || `call_${round}_${k}`, type: 'function', function: { name: c.name, arguments: c.args || '{}' },
+        }));
+        history.push({ role: 'assistant', content: content || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) });
+        if (!toolCalls.length) return { ok: true };
+
+        pending = toolCalls;
+        const results = [];
+        for (const tc of toolCalls) {
+          let input = null;
+          try { input = JSON.parse(tc.function.arguments || '{}'); } catch { /* reported below */ }
+          const block = { id: tc.id, name: tc.function.name, input: input || {} };
+          const label = tools.labelFor(block);
+          onTool({ id: tc.id, label, state: 'running' });
+          const result = input === null ? { error: 'The arguments were not valid JSON.' } : await tools.execute(block, ctx);
+          onTool({ id: tc.id, label, state: result.declined ? 'declined' : result.error ? 'error' : 'done' });
+          results.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+        }
+        pending = null;
+        history.push(...results);
+        if (halted) return { stopped: true };
+      }
+      return { ok: true };
+    } catch (err) {
+      if (pending) history.push(...pending.map(tc => ({ role: 'tool', tool_call_id: tc.id, content: 'Stopped by the user.' })));
+      else if (history.length === base + 1) history.length = base;
+      if (err.name === 'AbortError') return { stopped: true };
+      return { error: explainOpenAI(err) };
+    } finally {
+      currentFetch = null;
+    }
+  }
+
   return {
+    providers: PROVIDERS,
     models: MODELS,
     defaultModel: DEFAULT_MODEL,
 
-    hasKey: () => !!readKey(),
-    saveKey(key) {
+    hasKey: (provider = 'anthropic') => !!readKey(provider),
+    saveKey(key, provider = 'anthropic') {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('Keychain encryption is not available');
-      fs.writeFileSync(keyPath, safeStorage.encryptString(key.trim()), { mode: 0o600 });
+      fs.writeFileSync(keyPaths[provider], safeStorage.encryptString(key.trim()), { mode: 0o600 });
     },
-    removeKey() { try { fs.unlinkSync(keyPath); } catch { /* already gone */ } },
+    removeKey(provider = 'anthropic') { try { fs.unlinkSync(keyPaths[provider]); } catch { /* already gone */ } },
+
+    /*
+     * The models a provider offers, as [{ id, name }]: Claude's are fixed;
+     * OpenAI's are the chat models your key can use.
+     */
+    async listModels(provider) {
+      if (provider === 'openai') {
+        const key = readKey('openai');
+        if (!key) return { models: [], error: 'Add your OpenAI API key to see its models.' };
+        try {
+          const r = await fetch(`${OPENAI}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
+          if (r.status === 401) return { models: [], error: "That OpenAI key wasn't accepted." };
+          const j = await r.json();
+          const chat = (j.data || [])
+            .filter(m => /^(gpt|o\d|chatgpt)/.test(m.id) && !/(audio|realtime|tts|transcribe|search|image|embed|instruct|whisper|dall|moderation)/.test(m.id))
+            .sort((a, b) => (b.created || 0) - (a.created || 0));
+          return { models: chat.map(m => ({ id: m.id, name: m.id })) };
+        } catch {
+          return { models: [], error: 'Could not reach OpenAI.' };
+        }
+      }
+      return { models: Object.entries(MODELS).map(([id, name]) => ({ id, name })) };
+    },
 
     /* The text of the conversation so far, for a page that reloads: what
        was said, without the timestamps, tool calls or tool results. */
     transcript() {
       const lines = [];
       for (const m of history) {
-        const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content;
+        if (m.role !== 'user' && m.role !== 'assistant') continue;   // tool results
+        const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content.replace(/^\(Now:[^)]*\)\n\n/, '') }]
+          : Array.isArray(m.content) ? m.content : [];
         const text = blocks.filter(b => b.type === 'text' && !b.text.startsWith('(Now:')).map(b => b.text).join('');
         if (text.trim()) lines.push({ role: m.role, text });
       }
       return lines;
     },
 
-    reset() { halted = true; current?.abort(); history = []; },
+    reset() { halted = true; current?.abort(); currentFetch?.abort(); history = []; },
 
-    stop() { halted = true; current?.abort(); },
+    stop() { halted = true; current?.abort(); currentFetch?.abort(); },
 
     /*
      * One turn. Text arrives through onDelta as it streams, from however many
@@ -122,9 +276,12 @@ function createAssistant({ keyPath }) {
      * The promise resolves when the reply is complete, or with an error
      * message to show in its place.
      */
-    async send(text, model, { onDelta, onTool, confirm, onTimer }) {
-      const base = history.length;
+    async send(text, { provider = 'anthropic', model } = {}, callbacks) {
       halted = false;
+      if (provider !== historyProvider) { history = []; historyProvider = provider; }
+      if (provider === 'openai') return sendOpenAI(text, model, callbacks);
+      const { onDelta, onTool, confirm, onTimer } = callbacks;
+      const base = history.length;
       history.push({ role: 'user', content: [{ type: 'text', text: now() }, { type: 'text', text }] });
       const chosen = MODELS[model] ? model : DEFAULT_MODEL;
       const ctx = { confirm, onTimer };
