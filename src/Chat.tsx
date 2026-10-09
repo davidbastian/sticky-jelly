@@ -285,6 +285,7 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
 
   function newChat() {
     stopAll();
+    onSound?.('new');
     api.reset();
     setLines([]);
     input.current?.focus();

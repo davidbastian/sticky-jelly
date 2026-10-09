@@ -83,7 +83,7 @@ export interface SidebarControl {
   sound: (kind: ChatSound) => void;
 }
 
-export type ChatSound = 'send' | 'think' | 'word' | 'done' | JellyAction;
+export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | JellyAction;
 
 export type JellyAction = 'wiggle' | 'bounce' | 'blush' | 'spin' | 'shiver' | 'melt';
 
@@ -758,6 +758,17 @@ export default function StickyJellyProject({
         }
         case 'done':
           tone({ f0: 950, f1: 320, dur: 0.1, vol: 0.3 });
+          break;
+        case 'new':
+          // Wiped clean: a quick swish, then two little bubbles.
+          whoosh(0.28, 0.2);
+          tone({ f0: 500, f1: 1100, dur: 0.09, vol: 0.22, at: 0.12 });
+          tone({ f0: 760, f1: 1500, dur: 0.09, vol: 0.18, at: 0.2 });
+          break;
+        case 'close':
+          // Letting go: a deflating slide down as it falls back into a blob.
+          tone({ f0: 720, f1: 130, dur: 0.42, vol: 0.38, vib: [7, 18] });
+          whoosh(0.35, 0.14);
           break;
         case 'wiggle':
           tone({ f0: 340, dur: 0.7, vol: 0.32, vib: [13, 70] });
@@ -1562,6 +1573,7 @@ export default function StickyJellyProject({
        itself back up as it falls. */
     function dismiss() {
       if (!side) return;
+      chatSound('close');
       side = null;
       talking = false;
       sideState = null;
