@@ -17,7 +17,8 @@
     "app": "npm run build:listen && electron desktop/main.cjs",
     "start": "npm run build:listen && vite build && electron desktop/main.cjs",
     "dist": "npm run build:listen && vite build && electron-builder",
-    "build:listen": "swiftc -O -o desktop/bin/jelly-listen desktop/listen/listen.swift"
+    "build:listen": "swiftc -O -o desktop/bin/jelly-listen desktop/listen/listen.swift",
+    "demo": "vite build && electron scripts/demo/record.cjs"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
