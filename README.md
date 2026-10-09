@@ -37,10 +37,6 @@ Press and hold the jelly for a moment. It winds itself up — shaking harder, sw
   <img src="media/desktop-hold.gif" width="900" alt="On the desktop, the jelly is held: it swells and turns through colours, then stretches up the right side of the screen into a sidebar asking 'What can I help with?', and answers a hello">
 </p>
 
-<p align="center">
-  <img src="media/hold.gif" width="800" alt="Closer in: held, the jelly swells and runs through colours, then stretches into a sidebar with the question curved under its face like a smile">
-</p>
-
 Esc or × lets it go, and it gathers itself back into a blob as it falls.
 
 ## Chat with it — it acts out what it says
