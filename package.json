@@ -5,7 +5,7 @@
   "description": "A soft-body creature that lives on your desktop. Grab it, stretch it, fling it — it sticks to the edges of your screen and peels off when you pull hard enough.",
   "author": {
     "name": "David Bastian",
-    "email": "d@davidbastian.red",
+    "email": "d@davidbastian.black",
     "url": "https://davidbastian.black"
   },
   "homepage": "https://davidbastian.black",
@@ -14,9 +14,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "app": "electron desktop/main.cjs",
-    "start": "vite build && electron desktop/main.cjs",
-    "dist": "vite build && electron-builder"
+    "app": "npm run build:listen && electron desktop/main.cjs",
+    "start": "npm run build:listen && vite build && electron desktop/main.cjs",
+    "dist": "npm run build:listen && vite build && electron-builder",
+    "build:listen": "swiftc -O -o desktop/bin/jelly-listen desktop/listen/listen.swift"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
@@ -40,7 +41,8 @@
     },
     "files": [
       "dist/**",
-      "desktop/**"
+      "desktop/**",
+      "!desktop/listen/**"
     ],
     "mac": {
       "category": "public.app-category.entertainment",
@@ -49,10 +51,15 @@
       ],
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSAppleEventsUsageDescription": "Sticky Jelly asks Finder to move desktop icons out from under the creature, and puts them back when it leaves."
+        "NSAppleEventsUsageDescription": "Sticky Jelly asks Finder to move desktop icons out from under the creature, and puts them back when it leaves.",
+        "NSMicrophoneUsageDescription": "Sticky Jelly listens when you press its microphone, so you can talk to it.",
+        "NSSpeechRecognitionUsageDescription": "Sticky Jelly turns what you say into text, on your Mac, so you can talk to it."
       }
     },
-    "copyright": "© 2026 David Bastian"
+    "copyright": "© 2026 David Bastian",
+    "asarUnpack": [
+      "desktop/bin/**"
+    ]
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1"

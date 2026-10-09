@@ -13,6 +13,7 @@
  * still use them.
  */
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell } = require('electron');
+const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const { createIconMover } = require('./icons.cjs');
@@ -158,6 +159,7 @@ ipcMain.handle('settings:get', () => ({
   assistant: {
     hasKey: assistant.hasKey(),
     model: saved.__model || assistant.defaultModel,
+    speak: saved.__speak !== false,
     models: assistant.models,
   },
 }));
@@ -167,6 +169,10 @@ ipcMain.handle('settings:key', (_e, key) => {
   return true;
 });
 ipcMain.handle('settings:key-remove', () => { assistant.removeKey(); });
+ipcMain.on('settings:speak', (_e, on) => {
+  saved.__speak = !!on;
+  saveSettings();
+});
 ipcMain.on('settings:model', (_e, model) => {
   if (!assistant.models[model]) return;
   saved.__model = model;
@@ -187,6 +193,49 @@ ipcMain.handle('chat:send', (e, text) => {
 });
 ipcMain.on('chat:stop', () => assistant.stop());
 ipcMain.on('chat:reset', () => assistant.reset());
+ipcMain.handle('chat:prefs', () => ({ speak: saved.__speak !== false }));
+
+/*
+ * Voice. The ears are a small native helper (desktop/listen) that listens on
+ * the microphone and transcribes with Apple's speech recognizer, on the device
+ * when it can; it prints one JSON event per line, passed straight through to
+ * the page. Inside the packaged app it lives outside the asar archive, since
+ * a binary in there cannot be run.
+ */
+let ears = null;
+function earsPath() {
+  const p = path.join(__dirname, 'bin', 'jelly-listen');
+  return app.isPackaged ? p.replace('app.asar', 'app.asar.unpacked') : p;
+}
+ipcMain.on('voice:start', (e) => {
+  if (ears) return;
+  const send = (ev) => { if (!e.sender.isDestroyed()) e.sender.send('voice:event', ev); };
+  try {
+    ears = spawn(earsPath(), [], { stdio: ['pipe', 'pipe', 'ignore'] });
+  } catch {
+    send({ type: 'error', message: 'Could not start listening.' });
+    return;
+  }
+  let buf = '';
+  ears.stdout.on('data', (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      try { send(JSON.parse(line)); } catch { /* partial line */ }
+    }
+  });
+  ears.on('error', () => send({ type: 'error', message: 'Could not start listening.' }));
+  ears.on('exit', (code, signal) => {
+    ears = null;
+    /* Killed by macOS (no permission prompt possible) rather than finishing. */
+    if (signal) send({ type: 'error', message: 'macOS stopped the microphone. Check Privacy & Security › Microphone and Speech Recognition.' });
+    send({ type: 'end' });
+  });
+});
+ipcMain.on('voice:stop', () => { try { ears?.stdin.write('stop\n'); } catch { /* already gone */ } });
+app.on('before-quit', () => { try { ears?.kill(); } catch { /* fine */ } });
 ipcMain.handle('chat:transcript', () => assistant.transcript());
 /* The sidebar needs the keyboard; an always-on-top window does not get it
    by itself. */
@@ -212,7 +261,7 @@ ipcMain.handle('settings:reset', () => {
 });
 
 /* Who made it, in the standard About panel. */
-const AUTHOR = { name: 'David Bastian', url: 'https://davidbastian.black', email: 'd@davidbastian.red' };
+const AUTHOR = { name: 'David Bastian', url: 'https://davidbastian.black', email: 'd@davidbastian.black' };
 function showAbout() {
   app.setAboutPanelOptions({
     applicationName: 'Sticky Jelly',

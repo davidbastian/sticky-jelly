@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('settings', {
   saveKey: (key) => ipcRenderer.invoke('settings:key', key),
   removeKey: () => ipcRenderer.invoke('settings:key-remove'),
   model: (m) => ipcRenderer.send('settings:model', m),
+  speak: (on) => ipcRenderer.send('settings:speak', !!on),
   openConsole: () => ipcRenderer.send('settings:console'),
   onSchema: (fn) => { ipcRenderer.on('settings:schema', () => fn()); },
 });

@@ -9,7 +9,7 @@
 import type { Control } from './StickyJelly';
 
 interface Section { title: string; controls: Control[] }
-interface Assistant { hasKey: boolean; model: string; models: Record<string, string> }
+interface Assistant { hasKey: boolean; model: string; models: Record<string, string>; speak: boolean }
 
 declare global {
   interface Window {
@@ -23,6 +23,7 @@ declare global {
       saveKey: (key: string) => Promise<boolean>;
       removeKey: () => Promise<void>;
       model: (m: string) => void;
+      speak: (on: boolean) => void;
       openConsole: () => void;
     };
   }
@@ -34,7 +35,7 @@ const title = document.getElementById('title')!;
 
 let sections: Section[] = [];
 let icons = true;
-let assistant: Assistant = { hasKey: false, model: '', models: {} };
+let assistant: Assistant = { hasKey: false, model: '', models: {}, speak: true };
 let current = 0;
 
 /* Enough decimals to show the step, no more. */
@@ -183,11 +184,16 @@ function assistantSection() {
   for (const [id, name] of Object.entries(assistant.models)) sel.add(new Option(name, id, false, id === assistant.model));
   sel.addEventListener('change', () => { assistant.model = sel.value; window.settings.model(sel.value); });
 
-  g.append(keyRow, statusRow, row('Model', sel));
+  const talk = toggle(assistant.speak, 'Talk back when I talk to it', (on) => {
+    assistant.speak = on;
+    window.settings.speak(on);
+  });
+
+  g.append(keyRow, statusRow, row('Model', sel), row('Talk back when I talk to it', talk));
 
   const note = document.createElement('p');
   note.className = 'note';
-  note.append('Press and hold the jelly to chat. Uses your own Anthropic API key, billed per message to your account — Haiku is the cheapest. ');
+  note.append('Press and hold the jelly to chat — type, or press the microphone and talk (speech is recognised on your Mac). Uses your own Anthropic API key, billed per message to your account; Haiku is the cheapest. ');
   const link = document.createElement('a');
   link.href = '#';
   link.textContent = 'Get a key in the Anthropic Console';

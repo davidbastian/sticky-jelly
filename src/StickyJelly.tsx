@@ -77,7 +77,26 @@ export interface SidebarControl {
   setFaceTop: (top: boolean) => void;
   /* Its mouth chatters while a reply streams in. */
   setTalking: (on: boolean) => void;
+  /* Do something with its body — what the assistant writes as *wiggles*. */
+  act: (kind: JellyAction) => void;
 }
+
+export type JellyAction = 'wiggle' | 'bounce' | 'blush' | 'spin' | 'shiver' | 'melt';
+
+/* Which of its moves an action written by the assistant means. */
+export function actionKind(text: string): JellyAction {
+  const t = text.toLowerCase();
+  if (/bounc|hop|jump|boing/.test(t)) return 'bounce';
+  if (/blush|flush|pink/.test(t)) return 'blush';
+  if (/spin|twirl|dizzy|roll/.test(t)) return 'spin';
+  if (/shiver|shudder|trembl|shake|quiver/.test(t)) return 'shiver';
+  if (/melt|droop|sag|flop|puddle|sigh/.test(t)) return 'melt';
+  return 'wiggle';
+}
+
+const ACT_LEN: Record<JellyAction, number> = {
+  wiggle: 1.1, bounce: 0.6, blush: 1.8, spin: 1.4, shiver: 0.9, melt: 1.6,
+};
 
 export type Control =
   | { key: string; label: string; kind: 'number'; value: number; min: number; max: number; step: number }
@@ -459,9 +478,14 @@ export default function StickyJellyProject({
     let sideTargets: { x: number; y: number }[] = [];
     let sideSaved = { restEdge: 0, thickR: 0 };
     let faceTop = false;
+    let sideState: SidebarState | null = null;  // last reported, to resend when the colour changes
     // Talking: the mouth flaps toward a new random openness every few
     // hundredths of a second, sprung so it reads as chatter, not flicker.
     let talking = false, talkOpen = 0, talkGoal = 0, talkNext = 0;
+    // An action in progress: what, and how much of it is left (seconds).
+    let actKind: JellyAction | '' = '', actLeft = 0;
+    const actAmp = () => (actKind ? Math.max(0, actLeft / ACT_LEN[actKind]) : 0);
+    const blushColor = new THREE.Color('#ff5fa2');
     /* 0 → 1 over the hold. Winds the creature up: it shakes harder, swells,
        spins its eyes and runs through colours faster and faster, dizzy, until
        it bursts into the sidebar. */
@@ -824,9 +848,12 @@ export default function StickyJellyProject({
       const n = pts.length;
       const worm = isWorm();
       const mrg = worm ? thickR : 0; // the worm's surface is thickR out from its spine
-      const g = side ? 0 : cfg.gravity * dpr * STEP * STEP;
+      const amp = actAmp();
+      const melting = actKind === 'melt' ? amp : 0;
+      // Melting lets the sidebar sag under a little gravity before it recovers.
+      const g = (side ? cfg.gravity * 0.25 * melting : cfg.gravity) * dpr * STEP * STEP;
       /* Holding still charges a shake, so the long-press is felt coming. */
-      const jit = (cfg.wobble + charge * charge * 70) * dpr * STEP * 8;
+      const jit = (cfg.wobble + charge * charge * 70 + (actKind === 'shiver' ? amp * 45 : 0)) * dpr * STEP * 8;
       if (worm) thickR += (thickGoal - thickR) * 0.08;
       const breatheR = restR * (1 + Math.sin(t * 1.7) * cfg.breathe);
 
@@ -841,6 +868,8 @@ export default function StickyJellyProject({
         p.px = p.x; p.py = p.y;
         p.x += vx + (Math.random() - 0.5) * jit;
         p.y += vy + g + (Math.random() - 0.5) * jit;
+        // Wiggle: a sideways wave running round the body.
+        if (actKind === 'wiggle') p.x += Math.sin(t * 26 + i * 0.7) * amp * 1.4 * dpr;
       }
 
       // Sidebar: every point springs toward its place on the panel outline.
@@ -850,8 +879,9 @@ export default function StickyJellyProject({
         for (let i = 0; i < n; i++) {
           const p = pts[i], t = sideTargets[i];
           if (!t) continue;
-          p.x += (t.x - p.x) * 0.05;
-          p.y += (t.y - p.y) * 0.05;
+          const k = 0.05 * (1 - melting * 0.85);
+          p.x += (t.x - p.x) * k;
+          p.y += (t.y - p.y) * k;
         }
       }
 
@@ -1064,8 +1094,8 @@ export default function StickyJellyProject({
       let tx = ld > 1 ? lx / ld : 0;
       let ty = ld > 1 ? ly / ld : 0;
       // Dizzy: the pupils start to roll, faster as the hold charges.
-      if (charge > 0.15) {
-        const a = (performance.now() / 1000) * (6 + charge * 18);
+      if (charge > 0.15 || actKind === 'spin') {
+        const a = (performance.now() / 1000) * (6 + Math.max(charge, actKind === 'spin' ? 0.6 : 0) * 18);
         tx = Math.cos(a); ty = Math.sin(a);
         if (charge > 0.45 && mood !== 'surprised') { mood = 'surprised'; pendingMood = null; }
       }
@@ -1255,6 +1285,13 @@ export default function StickyJellyProject({
       /* No ground to recolour when the window is the ground. */
       if (scene.background) (scene.background as THREE.Color).set(cfg.bgColor);
       bodyMat.color.set(cfg.blobColor);
+      /* The chat is drawn in the body's colour; keep it in step when that
+         changes under it (from Settings, say). */
+      if (sideState && sideState.color !== cfg.blobColor) {
+        sideState = { ...sideState, color: cfg.blobColor };
+        sidebarCb.current?.(sideState);
+      }
+      if (actKind === 'blush') bodyMat.color.lerp(blushColor, Math.sin(Math.min(1, actAmp()) * Math.PI) * 0.75);
       if (charge > 0.1) {
         // Cycles through the hues, speeding up, blended in as the hold builds.
         const k = Math.min(1, (charge - 0.1) / 0.45);
@@ -1272,6 +1309,7 @@ export default function StickyJellyProject({
         for (const m of teethMeshes) m.visible = false;
         mouthMesh.visible = false;
       }
+      if (actKind && (actLeft -= dt) <= 0) { actKind = ''; actLeft = 0; }
       // Builds while held; let go (or burst) and it settles back over ~¼s.
       charge = holdAt ? Math.min(1, (now - holdAt) / HOLD_MS) : Math.max(0, charge - dt * 4);
       if (holdAt && now - holdAt > HOLD_MS && pts.length) summon();
@@ -1361,10 +1399,11 @@ export default function StickyJellyProject({
       faceTop = false;
       sideTargets = sidebarTargets(side);
       if (hover.current) { wasOver = true; hover.current(true); }
-      sidebarCb.current?.({
+      sideState = {
         x: side.x0 / dpr, y: side.y0 / dpr, w: w / dpr, h: (side.y1 - side.y0) / dpr, below: SIDE_BELOW,
         side: right ? 'right' : 'left', color: cfg.blobColor,
-      });
+      };
+      sidebarCb.current?.(sideState);
     }
 
     /* Let go of the shape: springs off, gravity on, and the jelly gathers
@@ -1373,6 +1412,7 @@ export default function StickyJellyProject({
       if (!side) return;
       side = null;
       talking = false;
+      sideState = null;
       sideTargets = [];
       restEdge = sideSaved.restEdge;
       thickGoal = sideSaved.thickR;
@@ -1385,6 +1425,12 @@ export default function StickyJellyProject({
       dismiss,
       setFaceTop: (top) => { faceTop = top; },
       setTalking: (on) => { talking = on; },
+      act: (kind) => {
+        actKind = kind;
+        actLeft = ACT_LEN[kind];
+        // A bounce is a single kick upward; the springs (or gravity) do the rest.
+        if (kind === 'bounce') for (const p of pts) { if (!p.stuck) p.py = p.y + 16 * dpr; }
+      },
     };
 
     // ── At rest ──────────────────────────────────────────────────────────────

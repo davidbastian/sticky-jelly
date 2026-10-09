@@ -24,6 +24,16 @@ contextBridge.exposeInMainWorld('jelly', {
     stop: () => ipcRenderer.send('chat:stop'),
     reset: () => ipcRenderer.send('chat:reset'),
     transcript: () => ipcRenderer.invoke('chat:transcript'),
+    prefs: () => ipcRenderer.invoke('chat:prefs'),
+  },
+  voice: {
+    start: () => ipcRenderer.send('voice:start'),
+    stop: () => ipcRenderer.send('voice:stop'),
+    on: (fn) => {
+      const on = (_e, ev) => fn(ev);
+      ipcRenderer.on('voice:event', on);
+      return () => ipcRenderer.off('voice:event', on);
+    },
   },
   /* Every control, described once; the shell answers with changes to apply. */
   settings: (schema, set) => {

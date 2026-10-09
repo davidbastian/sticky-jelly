@@ -12,7 +12,7 @@
  * picks up where it left off.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import type { SidebarState } from './StickyJelly';
+import { actionKind, type JellyAction, type SidebarState } from './StickyJelly';
 
 /* fresh: written during this visit, so its words get the drop-in. */
 interface Line { role: 'user' | 'assistant'; text: string; error?: boolean; fresh?: boolean }
@@ -23,6 +23,52 @@ interface ChatApi {
   stop: () => void;
   reset: () => void;
   transcript: () => Promise<{ role: 'user' | 'assistant'; text: string }[]>;
+  prefs: () => Promise<{ speak: boolean }>;
+}
+
+type VoiceEvent =
+  | { type: 'ready' } | { type: 'end' }
+  | { type: 'level'; value: number }
+  | { type: 'partial' | 'final'; text: string }
+  | { type: 'error'; message: string };
+
+export interface VoiceApi {
+  start: () => void;
+  stop: () => void;
+  on: (fn: (ev: VoiceEvent) => void) => () => void;
+}
+
+/*
+ * Actions: the assistant writes *wiggles*, and the jelly does it. Bold
+ * (**…**) is unwrapped first so it is never mistaken for one. A live reply
+ * hides a half-written action until its closing asterisk arrives.
+ */
+const ACT = /\*([^*\n]{1,60})\*/g;
+type Part = { kind: 'text'; v: string } | { kind: 'act'; v: string };
+function parse(text: string, live: boolean): Part[] {
+  const t = text.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+  const out: Part[] = [];
+  let last = 0;
+  for (const m of t.matchAll(ACT)) {
+    if (m.index! > last) out.push({ kind: 'text', v: t.slice(last, m.index) });
+    out.push({ kind: 'act', v: m[1].trim() });
+    last = m.index! + m[0].length;
+  }
+  let rest = t.slice(last);
+  if (live) { const open = rest.indexOf('*'); if (open >= 0) rest = rest.slice(0, open); }
+  else rest = rest.replace(/\*/g, '');
+  if (rest) out.push({ kind: 'text', v: rest });
+  return out;
+}
+
+/* What gets read aloud: the words, not the actions or the markup. */
+function spoken(text: string) {
+  return parse(text, true)
+    .filter(p => p.kind === 'text')
+    .map(p => p.v)
+    .join('')
+    .replace(/`/g, '')
+    .replace(/^\s*-\s+/gm, '');
 }
 
 /* Light text on a dark body, dark text on a light one. */
@@ -35,12 +81,14 @@ function ink(hex: string) {
     : { text: '#111113', soft: 'rgba(0,0,0,0.5)', fill: 'rgba(0,0,0,0.07)', line: 'rgba(0,0,0,0.14)' };
 }
 
-export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
+export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking, onAction }: {
   state: SidebarState;
   api: ChatApi;
+  voice?: VoiceApi;
   onClose: () => void;
   onFaceTop: (top: boolean) => void;
   onTalking?: (on: boolean) => void;
+  onAction?: (kind: JellyAction) => void;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
@@ -51,6 +99,12 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLDivElement>(null);
+  const [listening, setListening] = useState(false);
+  const [level, setLevel] = useState(0);
+  const [scrolling, setScrolling] = useState(false);
+  const scrollTimer = useRef(0);
+  /* Spoken replies: utterances still queued, and whether the text is done. */
+  const voiceOut = useRef({ queued: 0, streaming: false });
 
   /* A jiggle on every send, restarted even if the last one is still going. */
   function jiggle() {
@@ -76,6 +130,12 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
+  /* Nothing keeps talking or listening once the sidebar is gone. */
+  useEffect(() => () => {
+    speechSynthesis.cancel();
+    voice?.stop();
+  }, [voice]);
+
   /* Esc closes, from anywhere in the window. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -91,11 +151,34 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [draft]);
 
-  async function send() {
-    const text = draft.trim();
+  /* Read a piece of the reply aloud; the mouth keeps moving until the last
+     queued piece has been said. */
+  function say(text: string) {
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.04;
+    u.pitch = 1.3;   // a little higher: it is a small creature
+    const out = voiceOut.current;
+    out.queued++;
+    u.onstart = () => onTalking?.(true);
+    u.onend = u.onerror = () => {
+      out.queued = Math.max(0, out.queued - 1);
+      if (!out.queued && !out.streaming) onTalking?.(false);
+    };
+    speechSynthesis.speak(u);
+  }
+
+  function shush() {
+    speechSynthesis.cancel();
+    voiceOut.current.queued = 0;
+    onTalking?.(false);
+  }
+
+  async function send(spokenText?: string) {
+    const text = (spokenText ?? draft).trim();
     if (busy) return;
     jiggle();
     if (!text) return;
+    shush();
     setDraft('');
     setBusy(true);
     setLines(l => [...l, { role: 'user', text }, { role: 'assistant', text: '', fresh: true }]);
@@ -103,21 +186,86 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
       const last = fn(l[l.length - 1]);
       return last ? [...l.slice(0, -1), last] : l.slice(0, -1);
     });
-    /* The mouth moves from the first word to the last. */
+
+    // Talk back only when talked to, and only if that is switched on.
+    const talkBack = spokenText !== undefined && (await api.prefs()).speak;
+    const out = voiceOut.current;
+    out.streaming = true;
+    let acc = '', fired = 0, said = 0;
+    const speakUpTo = (final: boolean) => {
+      const plain = spoken(acc);
+      let upto = plain.length;
+      if (!final) {
+        // Whole sentences only while it is still arriving.
+        upto = -1;
+        for (const m of plain.matchAll(/[.!?…:;](\s)|\n/g)) upto = m.index! + 1;
+      }
+      if (upto > said) {
+        const chunk = plain.slice(said, upto).trim();
+        said = upto;
+        if (chunk) say(chunk);
+      }
+    };
+
+    /* The mouth moves from the first word to the last (or the last word said). */
     const off = api.onDelta(d => {
       onTalking?.(true);
+      acc += d;
       appendLast(line => ({ ...line, text: line.text + d }));
+      // Act out every action as soon as its closing asterisk lands.
+      const acts = [...acc.replace(/\*\*([^*\n]+)\*\*/g, '$1').matchAll(ACT)];
+      for (; fired < acts.length; fired++) onAction?.(actionKind(acts[fired][1]));
+      if (talkBack) speakUpTo(false);
     });
     const res = await api.send(text);
     off();
-    onTalking?.(false);
-    if (res.error) appendLast(line => ({ ...line, text: res.error!, error: true }));
+    out.streaming = false;
+    if (talkBack && !res.error && !res.stopped) speakUpTo(true);
+    if (!out.queued) onTalking?.(false);
+    if (res.error) appendLast(line => ({ ...line, text: res.error!, error: true, fresh: false }));
     else if (res.stopped) appendLast(line => (line.text ? line : null));
     setBusy(false);
     input.current?.focus();
   }
 
+  /*
+   * Talk to it: the words appear in the composer as you say them, and when
+   * you pause it sends them. Pressing the mic again sends straight away.
+   */
+  function toggleMic() {
+    if (!voice) return;
+    if (listening) { voice.stop(); return; }
+    if (busy) return;
+    shush();
+    setDraft('');
+    setListening(true);
+    let heard = '', failed = '';
+    const off = voice.on(ev => {
+      if (ev.type === 'level') setLevel(ev.value);
+      else if (ev.type === 'partial') { heard = ev.text; setDraft(ev.text); }
+      else if (ev.type === 'final') heard = ev.text || heard;
+      else if (ev.type === 'error') failed = ev.message;
+      else if (ev.type === 'end') {
+        off();
+        setListening(false);
+        setLevel(0);
+        if (failed) {
+          setDraft('');
+          setLines(l => [...l, { role: 'assistant', text: failed, error: true }]);
+        } else if (heard.trim()) send(heard);
+        else setDraft('');
+      }
+    });
+    voice.start();
+  }
+
+  function stopAll() {
+    api.stop();
+    shush();
+  }
+
   function newChat() {
+    stopAll();
     api.reset();
     setLines([]);
     input.current?.focus();
@@ -193,10 +341,19 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
           <Smile text="What can I help with?" play={shown} />
         </div>
       ) : (
-        <div ref={scroller} style={{
-          flex: 1, overflowY: 'auto', marginTop: 148, paddingRight: 4,
-          display: 'flex', flexDirection: 'column', gap: 12,
-        }}>
+        <div
+          ref={scroller}
+          className={`log${scrolling ? ' scrolling' : ''}`}
+          onScroll={() => {
+            setScrolling(true);
+            clearTimeout(scrollTimer.current);
+            scrollTimer.current = window.setTimeout(() => setScrolling(false), 900);
+          }}
+          style={{
+            flex: 1, overflowY: 'auto', marginTop: 148, paddingRight: 10,
+            display: 'flex', flexDirection: 'column', gap: 12,
+          }}
+        >
           {lines.map((l, i) => l.role === 'user' ? (
             <div key={i} className="bubble" style={{
               alignSelf: 'flex-end', maxWidth: '85%', background: c.fill,
@@ -207,7 +364,7 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
               whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: l.error ? c.soft : c.text,
             }}>
               {l.text
-                ? (l.fresh && !l.error ? <Words text={l.text} /> : l.text)
+                ? (l.error ? l.text : <Reply text={l.text} fresh={!!l.fresh} live={busy && i === lines.length - 1} />)
                 : <Thinking />}
             </div>
           ))}
@@ -224,6 +381,12 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
             <span className="drop" style={{ left: '52%', animationDelay: '-1.6s' }} />
             <span className="drop" style={{ left: '78%', animationDelay: '-2.9s' }} />
           </span>
+          {voice && (
+            <span
+              className={`blob send mic wob-a${listening ? ' is-listening' : ''}${heat('mic')}`}
+              style={{ ['--lvl' as string]: level }}
+            />
+          )}
           <span className={`blob send wob-b${canSend ? '' : ' is-idle'}${heat('send')}`} />
         </div>
         <div className="goo-front">
@@ -240,12 +403,27 @@ export default function Chat({ state, api, onClose, onFaceTop, onTalking }: {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
               }}
             />
-            {!draft && <Hint text="Ask anything…" />}
+            {!draft && <Hint key={listening ? 'l' : 'a'} text={listening ? 'Listening…' : 'Ask anything…'} />}
           </span>
+          {voice && (
+            <button
+              className="ghost send"
+              {...hotProps('mic')}
+              onClick={toggleMic}
+              aria-label={listening ? 'Stop listening and send' : 'Talk'}
+              aria-pressed={listening}
+              disabled={busy && !listening}
+            >
+              <svg width="14" height="16" viewBox="0 0 14 16" aria-hidden="true">
+                <rect x="4" y="1" width="6" height="9" rx="3" fill="currentColor" />
+                <path d="M1.5 7.5a5.5 5.5 0 0 0 11 0M7 13v2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
           <button
             className="ghost send"
             {...hotProps('send')}
-            onClick={busy ? api.stop : send}
+            onClick={busy ? stopAll : () => send()}
             aria-label={busy ? 'Stop' : 'Send'}
             disabled={!canSend}
           >
@@ -287,6 +465,31 @@ function Hint({ text }: { text: string }) {
     <span className="hint" aria-hidden="true">
       {[...text].map((ch, i) => (
         <span key={i} style={{ animationDelay: `${i * 0.06}s` }}>{ch}</span>
+      ))}
+    </span>
+  );
+}
+
+/*
+ * A reply: its words, and its actions — no asterisks, but a little tag that
+ * moves the way it reads (a wiggle wiggles, a bounce bounces) while the
+ * jelly does the real thing.
+ */
+function Reply({ text, fresh, live }: { text: string; fresh: boolean; live: boolean }) {
+  return (
+    <>
+      {parse(text, live).map((p, i) => p.kind === 'act'
+        ? <Action key={i} text={p.v} />
+        : fresh ? <Words key={i} text={p.v} /> : <span key={i}>{p.v}</span>)}
+    </>
+  );
+}
+
+function Action({ text }: { text: string }) {
+  return (
+    <span className={`act act-${actionKind(text)}`} aria-label={`(${text})`}>
+      {[...text].map((ch, i) => (
+        <span key={i} aria-hidden="true" style={{ animationDelay: `${i * 0.045}s` }}>{ch}</span>
       ))}
     </span>
   );
@@ -367,7 +570,10 @@ const GOO_CSS = `
 /* A filtered element paints in the positioned pass, over plain siblings —
    so the real controls need their own place in that order, on top. */
 .jelly-chat .goo-front { position: relative; z-index: 1; }
-.jelly-chat .head { align-self: stretch; margin: 18px 16px 0; --fill: var(--blob); --fg: var(--ink); }
+.jelly-chat .head { align-self: stretch; margin: 18px 16px 0; --fill: var(--blob); --fg: var(--blob); }
+/* Soft, not solid: the goo is faded after it is shaped (a see-through fill
+   would be cut away by the filter's alpha threshold). */
+.jelly-chat .head .goo-layer { opacity: 0.16; }
 /* New chat on the left, close on the right — apart, so they don't melt. */
 .jelly-chat .head > * { justify-content: flex-start; }
 .jelly-chat .head .dot { margin-left: auto; }
@@ -401,6 +607,45 @@ const GOO_CSS = `
 .jelly-chat .is-press { scale: 0.84; transition-duration: 0.12s; }
 .jelly-chat .is-focus { scale: 1.01 1.08; }
 .jelly-chat .is-idle { scale: 0.78; }
+.jelly-chat .is-listening { scale: calc(1.05 + var(--lvl, 0) * 0.4); transition-duration: 0.09s; }
+
+/* The conversation: a thin bar in the body's own ink, only while scrolling
+   or hovered, and the text fading out at both ends rather than cut off. */
+.jelly-chat .log {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  padding-top: 8px; padding-bottom: 8px;
+}
+.jelly-chat .log::-webkit-scrollbar { width: 5px; }
+.jelly-chat .log::-webkit-scrollbar-track { background: transparent; margin: 14px 0; }
+.jelly-chat .log::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; transition: background 0.3s; }
+.jelly-chat .log:hover::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--blob) 18%, transparent); }
+.jelly-chat .log.scrolling::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--blob) 38%, transparent); }
+
+/* Actions, acted out in type as well as in the body. */
+.jelly-chat .act {
+  display: inline-block; white-space: pre; margin: 0 2px; padding: 0 9px;
+  border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: color-mix(in srgb, var(--blob) 12%, transparent);
+  color: color-mix(in srgb, var(--blob) 85%, transparent);
+  animation: jelly-pop 0.5s cubic-bezier(0.3, 1.7, 0.5, 1) both;
+}
+.jelly-chat .act > span {
+  display: inline-block; transform-origin: 50% 80%;
+  animation: act-wiggle 1.4s ease-in-out infinite;
+}
+.jelly-chat .act-bounce > span { animation-name: act-bounce; animation-duration: 1.1s; }
+.jelly-chat .act-spin > span { animation-name: act-spin; animation-duration: 2.6s; transform-origin: 50% 55%; }
+.jelly-chat .act-shiver > span { animation-name: act-shiver; animation-duration: 0.22s; }
+.jelly-chat .act-melt > span { animation-name: act-melt; animation-duration: 2.8s; transform-origin: 50% 100%; }
+.jelly-chat .act-blush { color: #ff8cc0; background: rgba(255, 95, 162, 0.18); }
+.jelly-chat .act-blush > span { animation-name: act-glow; animation-duration: 1.8s; }
+@keyframes act-wiggle { 0%, 100% { rotate: 0deg; } 25% { rotate: -10deg; } 75% { rotate: 10deg; } }
+@keyframes act-bounce { 0%, 55%, 100% { translate: 0 0; } 25% { translate: 0 -5px; } 40% { translate: 0 1px; } }
+@keyframes act-spin { 0%, 45% { rotate: 0deg; } 75%, 100% { rotate: 360deg; } }
+@keyframes act-shiver { 0%, 100% { translate: 0 0; } 25% { translate: -0.7px 0.4px; } 75% { translate: 0.7px -0.4px; } }
+@keyframes act-melt { 0%, 100% { translate: 0 0; scale: 1 1; } 50% { translate: 0 2px; scale: 1.12 0.78; } }
+@keyframes act-glow { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
 .jelly-chat .ghost {
   border: 0; background: transparent; color: var(--fg); font: inherit;
@@ -521,6 +766,6 @@ const GOO_CSS = `
   .jelly-chat .wob-a, .jelly-chat .wob-b, .jelly-chat .wob-wide,
   .jelly-chat .drop, .jelly-chat .bubble, .jelly-chat .composer.ooze, .jelly-chat .ooze .neck,
   .jelly-chat .composer.shake > *, .jelly-chat .word, .jelly-chat .thinking i,
-  .jelly-chat .hint span { animation: none; }
+  .jelly-chat .hint span, .jelly-chat .act, .jelly-chat .act > span { animation: none; }
 }
 `;
