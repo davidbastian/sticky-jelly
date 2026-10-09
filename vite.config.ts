@@ -10,4 +10,6 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   server: { port: 5173 },
+  /* Two pages: the creature, and its Settings window. */
+  build: { rollupOptions: { input: { main: 'index.html', settings: 'settings.html' } } },
 });

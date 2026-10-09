@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import GUI from 'lil-gui';
 
@@ -38,6 +38,20 @@ interface Pt {
  * outline that moves every frame, so a rectangle would be wrong the moment it
  * stretched. It reports on pointer move and the shell turns click-through on
  * and off with it.
+ *
+ * `onRest` reports what the creature covers once it has stopped moving — its
+ * bounding box — so the shell can move desktop icons out from underneath.
+ * Never mid-flight: only after the body has held within a few pixels for a
+ * moment.
+ *
+ * `onSettings` hands the shell a description of every control and a way to
+ * set one, so settings can live in a window of their own.
+ *
+ * `onSidebar` / `sidebarRef` are the long-press: hold still on the body and it
+ * stretches up the nearer side of the screen into a tall panel, face in the
+ * middle, for the page to put a chat on. Still a soft body the whole time —
+ * every point is pulled toward the panel's outline by a spring rather than
+ * placed on it, so it stretches into shape and keeps wobbling there.
  */
 interface Props {
   viewMode?: string;
@@ -45,7 +59,50 @@ interface Props {
   canvasShadow?: boolean;
   transparent?: boolean;
   onHover?: (over: boolean) => void;
+  onRest?: (rects: Rect[]) => void;
+  onSettings?: (bridge: SettingsBridge) => (() => void) | void;
+  onSidebar?: (state: SidebarState | null) => void;
+  sidebarRef?: MutableRefObject<SidebarControl | null>;
 }
+
+/* Where the sidebar formed, in CSS px, and the body colour to draw on. */
+/* `below` is the strip left free under the body, where the composer drips to. */
+export interface SidebarState {
+  x: number; y: number; w: number; h: number; below: number;
+  side: 'left' | 'right'; color: string;
+}
+export interface SidebarControl {
+  dismiss: () => void;
+  /* Face in the middle while the chat is empty, up top once it has content. */
+  setFaceTop: (top: boolean) => void;
+  /* Its mouth chatters while a reply streams in. */
+  setTalking: (on: boolean) => void;
+}
+
+export type Control =
+  | { key: string; label: string; kind: 'number'; value: number; min: number; max: number; step: number }
+  | { key: string; label: string; kind: 'boolean'; value: boolean }
+  | { key: string; label: string; kind: 'option'; value: string; options: string[] }
+  | { key: string; label: string; kind: 'color'; value: string };
+
+export interface SettingsBridge {
+  schema: { title: string; controls: Control[] }[];
+  set: (key: string, value: unknown) => void;
+}
+
+/* lil-gui keeps its ranges on underscored fields; read them once here. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function describe(c: any): Control {
+  const base = { key: c.property as string, label: c._name as string };
+  const cls = c.domElement.classList;
+  if (cls.contains('boolean')) return { ...base, kind: 'boolean', value: c.getValue() };
+  if (cls.contains('option')) return { ...base, kind: 'option', value: c.getValue(), options: c._values };
+  if (cls.contains('color')) return { ...base, kind: 'color', value: c.getValue() };
+  return { ...base, kind: 'number', value: c.getValue(), min: c._min, max: c._max, step: c._step };
+}
+
+/* CSS px, relative to the page. */
+export interface Rect { x: number; y: number; w: number; h: number }
 
 const PALETTES: Record<string, string> = {
   Red:    '#f53d3d',
@@ -61,13 +118,20 @@ const MAX_EYES = 9;
 const MAX_TEETH = 8;
 
 export default function StickyJellyProject({
-  viewMode, canvasRounded, canvasShadow, transparent = false, onHover,
+  viewMode, canvasRounded, canvasShadow, transparent = false, onHover, onRest, onSettings,
+  onSidebar, sidebarRef,
 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   /* Held in a ref so the effect can call the latest one without re-running:
      the whole simulation is built in that effect and must not restart. */
   const hover = useRef(onHover);
   hover.current = onHover;
+  const rest = useRef(onRest);
+  rest.current = onRest;
+  const settings = useRef(onSettings);
+  settings.current = onSettings;
+  const sidebarCb = useRef(onSidebar);
+  sidebarCb.current = onSidebar;
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -177,22 +241,14 @@ export default function StickyJellyProject({
     const gui = new GUI({ title: 'Sticky Jelly', container: guiContainer || undefined });
 
     /*
-     * On the desktop the panel starts hidden.
-     *
-     * With no #gui-project to mount into it attaches to the body, which on a
-     * transparent window means a control panel floating over the wallpaper —
-     * a demo rather than a creature. It is built either way, because every
-     * controller is wired to the same cfg the simulation reads; only the
-     * element is hidden, and G brings it back when something needs tuning.
+     * On the desktop the panel is never shown: settings live in a real
+     * Settings window the shell opens. The panel is still built, because every
+     * controller is wired to the same cfg the simulation reads and carries the
+     * onChange that applies it — so the window drives these controllers by
+     * property (`onSettings`), and a slider there behaves exactly like one
+     * here, rebuilds included.
      */
-    let guiShown = !transparent;
     if (transparent) gui.domElement.style.display = 'none';
-    const onKey = (e: KeyboardEvent) => {
-      if (!transparent || e.key.toLowerCase() !== 'g' || e.metaKey || e.ctrlKey) return;
-      guiShown = !guiShown;
-      gui.domElement.style.display = guiShown ? '' : 'none';
-    };
-    window.addEventListener('keydown', onKey);
 
     const fPhys = gui.addFolder('Physics');
     fPhys.add(cfg, 'gravity',      0, 4000, 10).name('Gravity');
@@ -252,6 +308,8 @@ export default function StickyJellyProject({
       cfg.bgColor = PALETTES[v];
       bgCtrl.updateDisplay();
     });
+    /* No ground on the desktop, so nothing here to set. */
+    if (transparent) fLook.hide();
 
     const fThrow = gui.addFolder('Throw');
     fThrow.add(cfg, 'throwPower', 0, 3, 0.05).name('Throw Power');
@@ -267,12 +325,22 @@ export default function StickyJellyProject({
     fSnd.add(cfg, 'sndPeelStyle', ['Pop', 'Tick', 'Pluck', 'Velcro']).name('Peel Style');
     fSnd.add(cfg, 'sndPeel',   0, 1, 0.01).name('Peel Volume');
 
+    const controllers = new Map(gui.controllersRecursive().map(c => [c.property, c]));
+    const unbindSettings = settings.current?.({
+      schema: gui.folders.filter(f => !f._hidden).map(f => ({
+        title: f._title,
+        controls: f.controllers.map(describe),
+      })),
+      set: (key, value) => controllers.get(key)?.setValue(value),
+    });
+
     // ── Soft body ────────────────────────────────────────────────────────────
     let pts: Pt[] = [];
     let restR = 0;          // blob rest radius (device px)
     let restEdge = 0;       // rest length between adjacent points / spine segments
     let restArea = 0;       // blob rest area
     let thickR = 0;         // worm half-thickness (device px)
+    let thickGoal = 0;      // what thickR eases toward (the sidebar fattens the worm)
 
     const centroid = () => {
       let cx = 0, cy = 0;
@@ -379,9 +447,31 @@ export default function StickyJellyProject({
       triangulateOutline();
     };
 
+    // Long-press → sidebar (see summon()).
+    const HOLD_MS = 700, HOLD_SLOP = 10;       // hold time, and how far it may drift (CSS px)
+    const SIDE_W = 380, SIDE_GAP = 14;         // panel width and its margin from the screen edge
+    const SIDE_BELOW = 66;                     // room under the body for the composer drop
+    const FACE_TOP = 124;                      // face height from the top once the chat has content
+    let holdAt = 0, holdX = 0, holdY = 0;      // holdAt 0 = not holding
+    /* yb: the bottom of everything the sidebar owns — the body, and the
+       composer drop hanging under it. */
+    let side: { x0: number; y0: number; x1: number; y1: number; yb: number; right: boolean } | null = null;
+    let sideTargets: { x: number; y: number }[] = [];
+    let sideSaved = { restEdge: 0, thickR: 0 };
+    let faceTop = false;
+    // Talking: the mouth flaps toward a new random openness every few
+    // hundredths of a second, sprung so it reads as chatter, not flicker.
+    let talking = false, talkOpen = 0, talkGoal = 0, talkNext = 0;
+    /* 0 → 1 over the hold. Winds the creature up: it shakes harder, swells,
+       spins its eyes and runs through colours faster and faster, dizzy, until
+       it bursts into the sidebar. */
+    let charge = 0;
+    const dizzy = new THREE.Color();
+
     const rebuild = () => {
       // The mount can legitimately measure 0x0 for a frame (first layout);
       // spawn nothing until the ResizeObserver reports a real size.
+      if (side) dismiss();
       if (W < 4 || H < 4) { pts = []; restR = 0; return; }
       const prev = pts.length && (restR > 1 || thickR > 1) ? centroid() : { x: W / 2, y: H * 0.35 };
       const c = {
@@ -391,7 +481,7 @@ export default function StickyJellyProject({
       const n = Math.round(cfg.points);
       pts = [];
       if (isWorm()) {
-        thickR = cfg.thickness * Math.min(W, H);
+        thickR = thickGoal = cfg.thickness * Math.min(W, H);
         const total = Math.min(cfg.wormLength * Math.min(W, H), W - thickR * 4);
         restEdge = total / (n - 1);
         restR = 0; restArea = 0;
@@ -402,7 +492,7 @@ export default function StickyJellyProject({
         }
         allocBodyGeometry(2 * n + 2 * CAP);
       } else {
-        thickR = 0;
+        thickR = thickGoal = 0;
         restR = cfg.size * Math.min(W, H);
         restEdge = 2 * restR * Math.sin(Math.PI / n);
         restArea = Math.PI * restR * restR;
@@ -631,6 +721,7 @@ export default function StickyJellyProject({
     let ptrVx = 0, ptrVy = 0;
     let lastPtrX = 0, lastPtrY = 0, lastPtrT = 0;
 
+
     const toLocal = (e: PointerEvent) => {
       const r = canvas.getBoundingClientRect();
       return { x: (e.clientX - r.left) * dpr, y: (e.clientY - r.top) * dpr };
@@ -638,6 +729,7 @@ export default function StickyJellyProject({
 
     canvas.addEventListener('pointerdown', (e) => {
       initAudio();
+      if (side) return; // the chat is on top of it; nothing to grab
       const { x, y } = toLocal(e);
       let best = -1, bestD = cfg.grabRadius * dpr;
       for (let i = 0; i < pts.length; i++) {
@@ -663,6 +755,7 @@ export default function StickyJellyProject({
         ptrVx = 0; ptrVy = 0;
         try { canvas.setPointerCapture(e.pointerId); } catch { /* touch quirk */ }
         canvas.style.cursor = 'grabbing';
+        if (sidebarCb.current) { holdAt = performance.now(); holdX = x; holdY = y; }
       }
     }, evt);
 
@@ -674,6 +767,7 @@ export default function StickyJellyProject({
      * you could have grabbed. A worm has no inside, so it is the points only.
      */
     const overBody = (x: number, y: number) => {
+      if (side && x >= side.x0 && x <= side.x1 && y >= side.y0 && y <= side.yb) return true;
       const reach = cfg.grabRadius * dpr;
       for (let i = 0; i < pts.length; i++) {
         if (Math.hypot(pts[i].x - x, pts[i].y - y) < reach) return true;
@@ -685,10 +779,13 @@ export default function StickyJellyProject({
       return false;
     };
 
+    /* On the window, not the canvas: the sidebar's chat sits over the canvas
+       and would otherwise hide the cursor from both the eyes and the shell. */
     let wasOver: boolean | null = null;
-    canvas.addEventListener('pointermove', (e) => {
+    window.addEventListener('pointermove', (e) => {
       const { x, y } = toLocal(e);
       mx = x; my = y;
+      if (holdAt && Math.hypot(x - holdX, y - holdY) > HOLD_SLOP * dpr) holdAt = 0;
       if (hover.current) {
         const over = dragIdx >= 0 || overBody(x, y);
         /* Only on the edges: this fires at pointer rate and crosses a process
@@ -706,6 +803,7 @@ export default function StickyJellyProject({
     }, evt);
 
     const release = () => {
+      holdAt = 0;
       if (dragIdx >= 0) {
         const p = pts[dragIdx];
         // Verlet velocity injection: previous position encodes the fling
@@ -726,7 +824,10 @@ export default function StickyJellyProject({
       const n = pts.length;
       const worm = isWorm();
       const mrg = worm ? thickR : 0; // the worm's surface is thickR out from its spine
-      const g = cfg.gravity * dpr * STEP * STEP;
+      const g = side ? 0 : cfg.gravity * dpr * STEP * STEP;
+      /* Holding still charges a shake, so the long-press is felt coming. */
+      const jit = (cfg.wobble + charge * charge * 70) * dpr * STEP * 8;
+      if (worm) thickR += (thickGoal - thickR) * 0.08;
       const breatheR = restR * (1 + Math.sin(t * 1.7) * cfg.breathe);
 
       // Integrate
@@ -738,20 +839,33 @@ export default function StickyJellyProject({
         const vx = (p.x - p.px) * cfg.damping;
         const vy = (p.y - p.py) * cfg.damping;
         p.px = p.x; p.py = p.y;
-        p.x += vx + (Math.random() - 0.5) * cfg.wobble * dpr * STEP * 8;
-        p.y += vy + g + (Math.random() - 0.5) * cfg.wobble * dpr * STEP * 8;
+        p.x += vx + (Math.random() - 0.5) * jit;
+        p.y += vy + g + (Math.random() - 0.5) * jit;
+      }
+
+      // Sidebar: every point springs toward its place on the panel outline.
+      // A pull, not a placement — momentum carries it past and back, so the
+      // body stretches into the shape and keeps a little give once there.
+      if (side) {
+        for (let i = 0; i < n; i++) {
+          const p = pts[i], t = sideTargets[i];
+          if (!t) continue;
+          p.x += (t.x - p.x) * 0.05;
+          p.y += (t.y - p.y) * 0.05;
+        }
       }
 
       // Constraints
       const iters = Math.round(cfg.iterations);
-      const bendRest = worm ? restEdge * 2 : 2 * restR * Math.sin(2 * Math.PI / n);
+      const bendRest = worm || side ? restEdge * 2 : 2 * restR * Math.sin(2 * Math.PI / n);
       for (let k = 0; k < iters; k++) {
         // Pressure + radial shape memory only apply to the closed blob —
         // the worm holds its form from segment + bend constraints alone.
-        if (!worm) {
+        if (!worm && !side) {
           const c = centroid();
           const area = polyArea();
-          const deficit = (restArea - area) / restArea;
+          // Swells as the hold charges — about to burst.
+          const deficit = (restArea * (1 + charge * charge * 0.45) - area) / restArea;
           if (cfg.pressure > 0 && Math.abs(deficit) > 0.001) {
             const push = deficit * cfg.pressure * restR * 0.03;
             for (let i = 0; i < n; i++) {
@@ -845,7 +959,7 @@ export default function StickyJellyProject({
           p.px += (p.x - p.px) * cfg.friction;
           p.py += (p.y - p.py) * cfg.friction;
         }
-        if (cfg.sticky && p.cd <= 0 && (touched || nearEdge)) {
+        if (cfg.sticky && !side && p.cd <= 0 && (touched || nearEdge)) {
           stickNew++;
           stickImpact = Math.max(stickImpact, Math.hypot(p.x - p.px, p.y - p.py));
           p.stuck = true;
@@ -888,8 +1002,10 @@ export default function StickyJellyProject({
 
     const updateFace = (dt: number) => {
       // Mood changes hide behind a blink so the face never pops mid-stare
-      moodTimer -= dt;
-      if (moodTimer <= 0 && blinkPhase === 0) {
+      // In the sidebar it keeps a plain face: it is listening.
+      if (side) {
+        if (mood !== 'classic' && blinkPhase === 0) { pendingMood = 'classic'; blinkPhase = 1; }
+      } else if ((moodTimer -= dt) <= 0 && blinkPhase === 0) {
         moodTimer = cfg.moodEvery * (0.6 + Math.random() * 0.8);
         const next = pickMood();
         if (next !== mood) { pendingMood = next; blinkPhase = 1; }
@@ -915,8 +1031,14 @@ export default function StickyJellyProject({
       // Face anchor spring-follows the head (worm) or centroid (blob), so the
       // face jiggles with the jelly instead of gliding rigidly.
       const worm = isWorm();
-      const target = worm ? pts[0] : centroid();
-      const tail = worm ? pts[pts.length - 1] : target;
+      let target = worm ? pts[0] : centroid();
+      let tail = worm ? pts[pts.length - 1] : target;
+      if (side) {
+        target = tail = {
+          x: (side.x0 + side.x1) / 2,
+          y: faceTop ? side.y0 + FACE_TOP * dpr : (side.y0 + side.y1) / 2,
+        };
+      }
       if (!faceInit) { facX = target.x; facY = target.y; tfX = tail.x; tfY = tail.y; faceInit = true; }
       const j = Math.max(0.05, cfg.faceJiggle);
       facVx += ((target.x - facX) * 220 * j - facVx * 16) * dt;
@@ -928,11 +1050,25 @@ export default function StickyJellyProject({
       tfX += tfVx * dt;
       tfY += tfVy * dt;
 
+      if (talking && side) {
+        if ((talkNext -= dt) <= 0) {
+          talkGoal = 0.15 + Math.random() * 0.85;
+          talkNext = 0.05 + Math.random() * 0.09;
+        }
+      } else talkGoal = 0;
+      talkOpen += (talkGoal - talkOpen) * Math.min(1, dt * 28);
+
       // Googly pupils: loose spring chasing the look direction
       const lx = mx - facX, ly = my - facY;
       const ld = Math.hypot(lx, ly);
-      const tx = ld > 1 ? lx / ld : 0;
-      const ty = ld > 1 ? ly / ld : 0;
+      let tx = ld > 1 ? lx / ld : 0;
+      let ty = ld > 1 ? ly / ld : 0;
+      // Dizzy: the pupils start to roll, faster as the hold charges.
+      if (charge > 0.15) {
+        const a = (performance.now() / 1000) * (6 + charge * 18);
+        tx = Math.cos(a); ty = Math.sin(a);
+        if (charge > 0.45 && mood !== 'surprised') { mood = 'surprised'; pendingMood = null; }
+      }
       const loose = 30 + (1 - cfg.googlyness) * 300;
       const dampP = 4 + (1 - cfg.googlyness) * 20;
       pupVx += ((tx - pupX) * loose - pupVx * dampP) * dt;
@@ -985,14 +1121,16 @@ export default function StickyJellyProject({
       const worm = isWorm();
       // Face reference radius: blob squash-scales with its area, the worm
       // face keys off its thickness so eyes stay proportional to the body.
+      /* A fattened sidebar worm keeps the face it had. */
+      const faceThick = side ? sideSaved.thickR : thickR;
       const R = worm
-        ? thickR * 8
+        ? faceThick * 8
         : restR * Math.max(0.55, Math.min(1.5, Math.sqrt(polyArea() / restArea)));
       const eyeR = cfg.eyeSize * R;
       // Sleepy: heavy lids — eyes never open past a slit
       const effBlink = mood === 'sleepy' ? Math.min(blinkT, 0.35) : blinkT;
 
-      const ex = worm ? thickR * 1.5 * cfg.eyeSpacing : cfg.eyeSpacing * R * 0.5;
+      const ex = worm ? faceThick * 1.5 * cfg.eyeSpacing : cfg.eyeSpacing * R * 0.5;
       const ey = worm ? 0 : -cfg.eyeHeight * R;
 
       if (mood === 'manyEyes') {
@@ -1041,6 +1179,12 @@ export default function StickyJellyProject({
         mouthMesh.position.y = facY + ey + eyeR * bigger + R * 0.16;
         const mr = eyeR * 0.9;
         mouthMesh.scale.set(mr * 0.85, mr, 1);
+      } else if (talkOpen > 0.03) {
+        mouthMesh.visible = true;
+        mouthMesh.position.x = facX;
+        mouthMesh.position.y = facY + ey + eyeR + R * 0.18;
+        const mr = eyeR * 0.85;
+        mouthMesh.scale.set(mr * (1.1 - talkOpen * 0.3), mr * talkOpen, 1);
       }
     };
 
@@ -1111,7 +1255,13 @@ export default function StickyJellyProject({
       /* No ground to recolour when the window is the ground. */
       if (scene.background) (scene.background as THREE.Color).set(cfg.bgColor);
       bodyMat.color.set(cfg.blobColor);
-      pupilMat.color.set(cfg.blobColor);
+      if (charge > 0.1) {
+        // Cycles through the hues, speeding up, blended in as the hold builds.
+        const k = Math.min(1, (charge - 0.1) / 0.45);
+        dizzy.setHSL(((now / 1000) * (1.5 + charge * 7)) % 1, 0.9, 0.56);
+        bodyMat.color.lerp(dizzy, k);
+      }
+      pupilMat.color.copy(bodyMat.color);
       bodyMesh.visible = pts.length > 0;
       if (pts.length) {
         if (isWorm()) updateWormGeometry();
@@ -1122,13 +1272,157 @@ export default function StickyJellyProject({
         for (const m of teethMeshes) m.visible = false;
         mouthMesh.visible = false;
       }
+      // Builds while held; let go (or burst) and it settles back over ~¼s.
+      charge = holdAt ? Math.min(1, (now - holdAt) / HOLD_MS) : Math.max(0, charge - dt * 4);
+      if (holdAt && now - holdAt > HOLD_MS && pts.length) summon();
+      if (rest.current && pts.length) checkRest(now);
       renderer.render(scene, camera);
     };
+
+    // ── Sidebar ──────────────────────────────────────────────────────────────
+    function rrPath(x0: number, y0: number, x1: number, y1: number, r: number) {
+      // A rounded rectangle walked from the middle of its right edge, turning
+      // the same way the blob's points are numbered (clockwise on screen).
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      const a = (x1 - x0) / 2, b = (y1 - y0) / 2;
+      const segs: { len: number; at: (u: number) => { x: number; y: number } }[] = [];
+      const line = (ax: number, ay: number, bx: number, by: number) => segs.push({
+        len: Math.hypot(bx - ax, by - ay),
+        at: (u) => ({ x: ax + (bx - ax) * u, y: ay + (by - ay) * u }),
+      });
+      const arc = (ox: number, oy: number, a0: number) => segs.push({
+        len: (Math.PI / 2) * r,
+        at: (u) => ({ x: ox + Math.cos(a0 + u * Math.PI / 2) * r, y: oy + Math.sin(a0 + u * Math.PI / 2) * r }),
+      });
+      line(cx + a, cy, cx + a, cy + b - r);
+      arc(cx + a - r, cy + b - r, 0);
+      line(cx + a - r, cy + b, cx - a + r, cy + b);
+      arc(cx - a + r, cy + b - r, Math.PI / 2);
+      line(cx - a, cy + b - r, cx - a, cy - b + r);
+      arc(cx - a + r, cy - b + r, Math.PI);
+      line(cx - a + r, cy - b, cx + a - r, cy - b);
+      arc(cx + a - r, cy - b + r, Math.PI * 1.5);
+      line(cx + a, cy - b + r, cx + a, cy);
+      const L = segs.reduce((t, sg) => t + sg.len, 0);
+      const at = (d: number) => {
+        d = ((d % L) + L) % L;
+        for (const sg of segs) {
+          if (d <= sg.len) return sg.at(sg.len ? d / sg.len : 0);
+          d -= sg.len;
+        }
+        return segs[0].at(0);
+      };
+      return { L, at, cx, cy };
+    }
+
+    const sidebarTargets = (sd: NonNullable<typeof side>) => {
+      const n = pts.length;
+      if (isWorm()) {
+        // The spine runs down the middle; the worm fattens to fill the width.
+        const half = (sd.x1 - sd.x0) / 2;
+        const top = sd.y0 + half, len = sd.y1 - sd.y0 - half * 2;
+        thickGoal = half;
+        restEdge = len / (n - 1);
+        return pts.map((_, i) => ({ x: sd.x0 + half, y: top + (len * i) / (n - 1) }));
+      }
+      const path = rrPath(sd.x0, sd.y0, sd.x1, sd.y1, Math.min(sd.x1 - sd.x0, sd.y1 - sd.y0) * 0.22);
+      restEdge = path.L / n;
+      // Start where point 0 already points, so nothing has to cross over.
+      const c = centroid();
+      const want = Math.atan2(pts[0].y - c.y, pts[0].x - c.x);
+      let d0 = 0, best = Infinity;
+      for (let k = 0; k < 360; k++) {
+        const q = path.at((path.L * k) / 360);
+        const diff = Math.abs(Math.atan2(Math.sin(Math.atan2(q.y - path.cy, q.x - path.cx) - want),
+          Math.cos(Math.atan2(q.y - path.cy, q.x - path.cx) - want)));
+        if (diff < best) { best = diff; d0 = (path.L * k) / 360; }
+      }
+      // Walk the same way round as the body's own numbering.
+      let wind = 0;
+      for (let i = 0; i < n; i++) {
+        const p = pts[i], q = pts[(i + 1) % n];
+        wind += p.x * q.y - q.x * p.y;
+      }
+      const dir = wind >= 0 ? 1 : -1;
+      return pts.map((_, i) => path.at(d0 + dir * (path.L * i) / n));
+    };
+
+    function summon() {
+      holdAt = 0;
+      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = 'grab'; }
+      const c = centroid();
+      const right = c.x > W / 2;
+      const gap = SIDE_GAP * dpr;
+      const w = Math.min(SIDE_W * dpr, W * 0.45);
+      const x0 = right ? W - gap - w : gap;
+      side = { x0, y0: gap, x1: x0 + w, y1: H - gap - SIDE_BELOW * dpr, yb: H - gap, right };
+      sideSaved = { restEdge, thickR: thickGoal };
+      for (const p of pts) p.stuck = false;
+      faceTop = false;
+      sideTargets = sidebarTargets(side);
+      if (hover.current) { wasOver = true; hover.current(true); }
+      sidebarCb.current?.({
+        x: side.x0 / dpr, y: side.y0 / dpr, w: w / dpr, h: (side.y1 - side.y0) / dpr, below: SIDE_BELOW,
+        side: right ? 'right' : 'left', color: cfg.blobColor,
+      });
+    }
+
+    /* Let go of the shape: springs off, gravity on, and the jelly gathers
+       itself back up as it falls. */
+    function dismiss() {
+      if (!side) return;
+      side = null;
+      talking = false;
+      sideTargets = [];
+      restEdge = sideSaved.restEdge;
+      thickGoal = sideSaved.thickR;
+      faceTop = false;
+      anchor = null;
+      sidebarCb.current?.(null);
+    }
+
+    if (sidebarRef) sidebarRef.current = {
+      dismiss,
+      setFaceTop: (top) => { faceTop = top; },
+      setTalking: (on) => { talking = on; },
+    };
+
+    // ── At rest ──────────────────────────────────────────────────────────────
+    // The body's box is held against an anchor; any edge drifting past REST_PX
+    // (or a grab) restarts the clock. Comparing against the anchor rather than
+    // the last frame means a slow crawl still counts as moving.
+    const REST_PX = 6, REST_MS = 600;
+    type Box = { x0: number; y0: number; x1: number; y1: number };
+    let anchor: Box | null = null;
+    let restSent: Box | null = null;
+    let restSince = 0;
+    const bodyBox = () => {
+      const m = isWorm() ? thickR : 0;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of pts) {
+        x0 = Math.min(x0, p.x - m); y0 = Math.min(y0, p.y - m);
+        x1 = Math.max(x1, p.x + m); y1 = Math.max(y1, p.y + m);
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const near = (a: Box | null, b: Box | null) => !!a && !!b &&
+      Math.abs(a.x0 - b.x0) < REST_PX * dpr && Math.abs(a.y0 - b.y0) < REST_PX * dpr &&
+      Math.abs(a.x1 - b.x1) < REST_PX * dpr && Math.abs(a.y1 - b.y1) < REST_PX * dpr;
+    const checkRest = (now: number) => {
+      const b = bodyBox();
+      if (side) b.y1 = Math.max(b.y1, side.yb); // the composer drop covers icons too
+      if (dragIdx >= 0 || !near(anchor, b)) { anchor = b; restSince = now; return; }
+      if (now - restSince < REST_MS || near(restSent, b)) return;
+      restSent = b;
+      rest.current!([{ x: b.x0 / dpr, y: b.y0 / dpr, w: (b.x1 - b.x0) / dpr, h: (b.y1 - b.y0) / dpr }]);
+    };
+
     animate();
 
     return () => {
       cancelAnimationFrame(animId);
-      window.removeEventListener('keydown', onKey);
+      unbindSettings?.();
+      if (sidebarRef) sidebarRef.current = null;
       ac.abort();
       obs.disconnect();
       gui.destroy();

@@ -16,7 +16,7 @@ npm run dev     # the creature in a browser tab, for working on it
 npm run start   # build, then open it as a desktop app
 ```
 
-`npm run dist` packages a `.app` and a `.dmg` with electron-builder.
+`npm run dist` packages a `.app` and a `.dmg` with electron-builder, into `release/`.
 
 ## What it does
 
@@ -28,6 +28,10 @@ npm run start   # build, then open it as a desktop app
 
 **Two bodies.** A pressurised ring that behaves like a blob, and a thick rope that slinks like a worm.
 
+**It talks.** Press and hold it for a moment and it winds itself up — shaking harder, swelling, rolling its eyes and running through colours faster and faster, dizzy — then bursts up the nearer side of the screen into a tall sidebar, still a soft body the whole way, with its face in the middle and the question curved under it like a smile. The buttons on it are white goo, like its eyes. The message box is a drop of the body itself — black, with white letters — that oozes out of the bottom as the sidebar opens, pinches off, and hangs just below; the send button melts into it, and drips bud off the top while it thinks. While it waits for an answer three little drops bounce and melt into each other; once the answer comes, its mouth chatters and each word drops in like a blob landing — stretched as it falls, squashed as it hits. Ask it anything; the face moves up and the conversation takes its place. Esc or × lets go, and it gathers itself back into a blob as it falls.
+
+The chat runs on Claude through your own Anthropic API key: paste it into Settings › Assistant, where it is stored encrypted in your Keychain. Claude Haiku 5.5 is the default (the cheapest — roughly a twentieth of a cent a message); Sonnet 5.5 and Opus 5.5 are a menu away. Billing is per message to your Anthropic account, separate from any Claude subscription.
+
 ## The desktop part
 
 Three things make it a creature on your desktop rather than a window with a creature in it:
@@ -38,7 +42,9 @@ Three things make it a creature on your desktop rather than a window with a crea
 
 **The whole work area.** The window is the screen, so the edges it sticks to are your screen's edges.
 
-Press **G** to show the controls — physics, stickiness, body, face, sound — and again to hide them.
+**Icons get out of the way.** When the jelly comes to rest, any desktop icon under it is moved by Finder to the nearest free spot, and put back once the jelly leaves. Only on rest — Finder can't animate icons, so following a flung body would flicker. Where each icon came from is kept on disk, and everything goes home on quit (or on the next launch, after a crash). macOS asks once to let Sticky Jelly control Finder. A desktop sorted by name, kind or date is left alone, since Finder would put the icons straight back.
+
+**A real Settings window.** Physics, stickiness, body, face, moods, throw and sound — the study's controls — live in a Settings window opened from the menu-bar item or with ⌘,. Changes apply as you drag and are saved for the next launch.
 
 ## How it works
 

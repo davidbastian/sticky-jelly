@@ -2,33 +2,64 @@
  * Sticky Jelly, as a thing that lives on the desktop.
  *
  * The study and the app are the same component — this file is only the mount
- * and the two wires the shell needs:
+ * and the wires the shell needs:
  *
  *   transparent   the ground is your wallpaper, not a colour
  *   onHover       whether the cursor is on the creature, so the shell can let
  *                 every other click through to whatever is behind it
- *
- * There is no GUI here. The study mounts lil-gui into #gui-project, which this
- * page does not have, and the component already treats that as optional — a
- * desktop toy with a control panel floating next to it is a demo, not a toy.
+ *   onRest        what it covers once it stops, so the shell can move desktop
+ *                 icons out from under it
+ *   onSettings    every control the study's panel has, so they can be shown
+ *                 in a Settings window instead of floating over the desktop
+ *   onSidebar     press and hold, and it stretches into a sidebar with a chat
+ *                 on it
  */
-import { StrictMode } from 'react';
+import { StrictMode, useCallback, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import StickyJelly from './StickyJelly';
+import StickyJelly, {
+  type Rect, type SettingsBridge, type SidebarControl, type SidebarState,
+} from './StickyJelly';
+import Chat from './Chat';
 
 declare global {
   interface Window {
-    jelly?: { hover: (over: boolean) => void };
+    jelly?: {
+      hover: (over: boolean) => void;
+      rest: (rects: Rect[]) => void;
+      settings: (schema: SettingsBridge['schema'], set: SettingsBridge['set']) => () => void;
+      focus: () => void;
+      chat: Parameters<typeof Chat>[0]['api'];
+    };
   }
 }
 
 function Desktop() {
+  const [sidebar, setSidebar] = useState<SidebarState | null>(null);
+  const control = useRef<SidebarControl | null>(null);
+
+  const onSidebar = useCallback((s: SidebarState | null) => {
+    setSidebar(s);
+    /* Typing needs the keyboard, which a floating window only gets on ask. */
+    if (s) window.jelly?.focus();
+  }, []);
+  const close = useCallback(() => control.current?.dismiss(), []);
+  const faceTop = useCallback((top: boolean) => control.current?.setFaceTop(top), []);
+  const talking = useCallback((on: boolean) => control.current?.setTalking(on), []);
+
+  const api = window.jelly?.chat;
   return (
-    <StickyJelly
-      viewMode="fullscreen"
-      transparent
-      onHover={(over) => window.jelly?.hover(over)}
-    />
+    <>
+      <StickyJelly
+        viewMode="fullscreen"
+        transparent
+        onHover={(over) => window.jelly?.hover(over)}
+        onRest={(rects) => window.jelly?.rest(rects)}
+        onSettings={({ schema, set }) => window.jelly?.settings(schema, set)}
+        onSidebar={api ? onSidebar : undefined}
+        sidebarRef={control}
+      />
+      {sidebar && api && <Chat state={sidebar} api={api} onClose={close} onFaceTop={faceTop} onTalking={talking} />}
+    </>
   );
 }
 
