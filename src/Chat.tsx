@@ -12,7 +12,7 @@
  * picks up where it left off.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { actionKind, type JellyAction, type SidebarState } from './StickyJelly';
+import { actionKind, type ChatSound, type JellyAction, type SidebarState } from './StickyJelly';
 
 /* fresh: written during this visit, so its words get the drop-in. */
 interface Line { role: 'user' | 'assistant'; text: string; error?: boolean; fresh?: boolean }
@@ -81,7 +81,7 @@ function ink(hex: string) {
     : { text: '#111113', soft: 'rgba(0,0,0,0.5)', fill: 'rgba(0,0,0,0.07)', line: 'rgba(0,0,0,0.14)' };
 }
 
-export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking, onAction }: {
+export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking, onAction, onSound }: {
   state: SidebarState;
   api: ChatApi;
   voice?: VoiceApi;
@@ -89,6 +89,7 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
   onFaceTop: (top: boolean) => void;
   onTalking?: (on: boolean) => void;
   onAction?: (kind: JellyAction) => void;
+  onSound?: (kind: ChatSound) => void;
 }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState('');
@@ -181,7 +182,13 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
     shush();
     setDraft('');
     setBusy(true);
+    onSound?.('send');
     setLines(l => [...l, { role: 'user', text }, { role: 'assistant', text: '', fresh: true }]);
+    // Little gurgles until the first word arrives.
+    let gurgle = window.setTimeout(function bubble() {
+      onSound?.('think');
+      gurgle = window.setTimeout(bubble, 260 + Math.random() * 320);
+    }, 450);
     const appendLast = (fn: (line: Line) => Line | null) => setLines(l => {
       const last = fn(l[l.length - 1]);
       return last ? [...l.slice(0, -1), last] : l.slice(0, -1);
@@ -209,16 +216,28 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
 
     /* The mouth moves from the first word to the last (or the last word said). */
     const off = api.onDelta(d => {
+      clearTimeout(gurgle);
       onTalking?.(true);
+      // A blip per word as it babbles — unless it is saying them out loud.
+      if (!talkBack) {
+        const words = d.split(/\s+/).filter(Boolean).slice(0, 4);
+        words.forEach((_, k) => window.setTimeout(() => onSound?.('word'), k * 55));
+      }
       acc += d;
       appendLast(line => ({ ...line, text: line.text + d }));
       // Act out every action as soon as its closing asterisk lands.
       const acts = [...acc.replace(/\*\*([^*\n]+)\*\*/g, '$1').matchAll(ACT)];
-      for (; fired < acts.length; fired++) onAction?.(actionKind(acts[fired][1]));
+      for (; fired < acts.length; fired++) {
+        const kind = actionKind(acts[fired][1]);
+        onAction?.(kind);
+        onSound?.(kind);
+      }
       if (talkBack) speakUpTo(false);
     });
     const res = await api.send(text);
     off();
+    clearTimeout(gurgle);
+    if (!res.error && !res.stopped) onSound?.('done');
     out.streaming = false;
     if (talkBack && !res.error && !res.stopped) speakUpTo(true);
     if (!out.queued) onTalking?.(false);

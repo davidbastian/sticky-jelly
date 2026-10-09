@@ -51,6 +51,7 @@ function Desktop() {
   const faceTop = useCallback((top: boolean) => control.current?.setFaceTop(top), []);
   const talking = useCallback((on: boolean) => control.current?.setTalking(on), []);
   const act = useCallback((kind: Parameters<SidebarControl['act']>[0]) => control.current?.act(kind), []);
+  const sound = useCallback((kind: Parameters<SidebarControl['sound']>[0]) => control.current?.sound(kind), []);
 
   const api = window.jelly?.chat;
   return (
@@ -73,6 +74,7 @@ function Desktop() {
           onFaceTop={faceTop}
           onTalking={talking}
           onAction={act}
+          onSound={sound}
         />
       )}
     </>

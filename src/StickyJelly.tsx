@@ -79,7 +79,11 @@ export interface SidebarControl {
   setTalking: (on: boolean) => void;
   /* Do something with its body — what the assistant writes as *wiggles*. */
   act: (kind: JellyAction) => void;
+  /* A sound from the chat, through the jelly's own (Settings › Sound) mix. */
+  sound: (kind: ChatSound) => void;
 }
+
+export type ChatSound = 'send' | 'think' | 'word' | 'done' | JellyAction;
 
 export type JellyAction = 'wiggle' | 'bounce' | 'blush' | 'spin' | 'shiver' | 'melt';
 
@@ -251,6 +255,7 @@ export default function StickyJellyProject({
       sndStick:        0,         // splat when points slap onto an edge
       sndPeelStyle:    'Pop',     // 'Pop' | 'Tick' | 'Pluck' | 'Velcro'
       sndPeel:         0.5,       // pop when points peel off
+      sndChat:         0.6,       // the chat: send, thinking, babble, actions
     };
 
     const isWorm = () => cfg.shape === 'Worm';
@@ -343,6 +348,7 @@ export default function StickyJellyProject({
     fSnd.add(cfg, 'sndStick',  0, 1, 0.01).name('Splat Volume');
     fSnd.add(cfg, 'sndPeelStyle', ['Pop', 'Tick', 'Pluck', 'Velcro']).name('Peel Style');
     fSnd.add(cfg, 'sndPeel',   0, 1, 0.01).name('Peel Volume');
+    fSnd.add(cfg, 'sndChat',   0, 1, 0.01).name('Chat Sounds');
 
     const controllers = new Map(gui.controllersRecursive().map(c => [c.property, c]));
     const unbindSettings = settings.current?.({
@@ -672,6 +678,109 @@ export default function StickyJellyProject({
     };
 
     // Splat when points smack onto an edge — flavour picked by Splat Style
+    // ── Chat sounds ──────────────────────────────────────────────────────────
+    // All made here, like the rest: a bubble as a message leaves, little
+    // gurgles while it thinks, a blip per word as it babbles its answer, a
+    // pop when it is done, and a sound for each thing its body can do.
+    const tone = (o: {
+      type?: OscillatorType; f0: number; f1?: number; dur: number; vol: number; at?: number;
+      vib?: [number, number]; trem?: number; lp?: number;
+    }) => {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime + (o.at ?? 0);
+      const osc = audioCtx.createOscillator();
+      osc.type = o.type ?? 'sine';
+      osc.frequency.setValueAtTime(o.f0, t);
+      if (o.f1) osc.frequency.exponentialRampToValueAtTime(o.f1, t + o.dur * 0.8);
+      const g = audioCtx.createGain();
+      const v = o.vol * cfg.sndChat;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+      let out: AudioNode = osc;
+      if (o.lp) {
+        const f = audioCtx.createBiquadFilter();
+        f.type = 'lowpass'; f.frequency.value = o.lp;
+        out.connect(f); out = f;
+      }
+      out.connect(g);
+      if (o.trem) {
+        const tg = audioCtx.createGain();
+        const lfo = audioCtx.createOscillator(); const d = audioCtx.createGain();
+        lfo.frequency.value = o.trem; d.gain.value = 0.5; tg.gain.value = 0.5;
+        lfo.connect(d); d.connect(tg.gain); g.connect(tg); tg.connect(master);
+        lfo.start(t); lfo.stop(t + o.dur + 0.02);
+      } else g.connect(master);
+      if (o.vib) {
+        const lfo = audioCtx.createOscillator(); const d = audioCtx.createGain();
+        lfo.frequency.value = o.vib[0]; d.gain.value = o.vib[1];
+        lfo.connect(d); d.connect(osc.frequency);
+        lfo.start(t); lfo.stop(t + o.dur + 0.02);
+      }
+      osc.start(t); osc.stop(t + o.dur + 0.02);
+    };
+    const whoosh = (dur: number, vol: number) => {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime;
+      const src = audioCtx.createBufferSource(); src.buffer = noiseBuf;
+      const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 4;
+      bp.frequency.setValueAtTime(300, t);
+      bp.frequency.exponentialRampToValueAtTime(2800, t + dur * 0.5);
+      bp.frequency.exponentialRampToValueAtTime(500, t + dur);
+      const g = audioCtx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(vol * cfg.sndChat, t + dur * 0.4);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(bp); bp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + dur + 0.02);
+    };
+    let lastWord = 0;
+    const chatSound = (kind: ChatSound) => {
+      initAudio();
+      if (!audioCtx || !cfg.sndOn || cfg.sndChat <= 0) return;
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      switch (kind) {
+        case 'send':
+          tone({ f0: 320, f1: 900, dur: 0.16, vol: 0.45 });
+          tone({ f0: 620, f1: 1400, dur: 0.12, vol: 0.25, at: 0.07 });
+          break;
+        case 'think':
+          tone({ f0: 420 + Math.random() * 380, f1: 900 + Math.random() * 300, dur: 0.07, vol: 0.12 });
+          break;
+        case 'word': {
+          // A babble, not a typewriter: never closer than ~45ms, pitch wandering.
+          const now = performance.now();
+          if (now - lastWord < 45) return;
+          lastWord = now;
+          const f = 330 + Math.random() * 260;
+          tone({ type: 'triangle', f0: f, f1: f * 0.82, dur: 0.06, vol: 0.16 });
+          break;
+        }
+        case 'done':
+          tone({ f0: 950, f1: 320, dur: 0.1, vol: 0.3 });
+          break;
+        case 'wiggle':
+          tone({ f0: 340, dur: 0.7, vol: 0.32, vib: [13, 70] });
+          break;
+        case 'bounce':
+          tone({ f0: 170, f1: 620, dur: 0.12, vol: 0.4 });
+          tone({ f0: 600, f1: 260, dur: 0.38, vol: 0.32, at: 0.1, vib: [9, 25] });
+          break;
+        case 'blush':
+          [1319, 1760, 2093].forEach((f, i) => tone({ f0: f, dur: 0.55, vol: 0.12, at: i * 0.07 }));
+          break;
+        case 'spin':
+          whoosh(0.75, 0.3);
+          break;
+        case 'shiver':
+          tone({ type: 'sawtooth', f0: 95, dur: 0.55, vol: 0.18, trem: 24, lp: 600 });
+          break;
+        case 'melt':
+          tone({ f0: 520, f1: 110, dur: 0.7, vol: 0.38, lp: 900, vib: [6, 12] });
+          break;
+      }
+    };
+
     const playSplat = (impact: number) => {
       if (!audioCtx || !noiseBuf || !cfg.sndOn || cfg.sndStick <= 0) return;
       const t = audioCtx.currentTime;
@@ -1427,6 +1536,7 @@ export default function StickyJellyProject({
       dismiss,
       setFaceTop: (top) => { faceTop = top; },
       setTalking: (on) => { talking = on; },
+      sound: chatSound,
       act: (kind) => {
         actKind = kind;
         actLeft = ACT_LEN[kind];

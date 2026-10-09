@@ -19,12 +19,27 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '../..');
-const OUT = path.join(ROOT, 'media');
+/*
+ * Three optional overrides, all defaulting to what this script always did:
+ *
+ *   DEMO_OUT      write somewhere other than media/
+ *   DEMO_GROUND   a flat colour behind the scenes instead of the backdrop,
+ *                 for recordings that go on a page rather than in the README
+ *   DEMO_ONLY     a comma-separated list of scenes to keep
+ *   DEMO_KEEP_MP4 also keep the h264 the GIF is made from
+ */
+const OUT = process.env.DEMO_OUT ? path.resolve(process.env.DEMO_OUT) : path.join(ROOT, 'media');
+const ONLY = (process.env.DEMO_ONLY || '').split(',').map(s => s.trim()).filter(Boolean);
+const KEEP_MP4 = !!process.env.DEMO_KEEP_MP4;
 const TMP = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'jelly-demo-'));
 const FPS = 30;
 const W = 960, H = 624;                    // the backdrop's proportions
 const MENU = 22, DOCK = 36;                // what the work area leaves out, in page px
 const BACKDROP = `url("${path.join(__dirname, 'backdrop.jpg').replace(/"/g, '\\"')}")`;
+/* What sits behind a scene: the photographed desktop, or a flat colour. */
+const GROUND = process.env.DEMO_GROUND
+  ? `${process.env.DEMO_GROUND}`
+  : `#000 ${BACKDROP} center / cover no-repeat`;
 
 app.commandLine.appendSwitch('force-device-scale-factor', '1');
 nativeTheme.themeSource = 'dark';
@@ -56,6 +71,8 @@ function offscreen(width, height, preload, page, { transparent = false } = {}) {
     webPreferences: { offscreen: true, preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   win.webContents.setFrameRate(FPS);
+  win.webContents.setAudioMuted(true);   // the chat makes sounds now; a demo run should not
+  win.webContents.on('console-message', (_e, level, message) => { if (level >= 3) console.error('[page]', message); });
   let frame = null;
   win.webContents.on('paint', (_e, _dirty, image) => { frame = image; });
   win.latest = () => frame;
@@ -149,7 +166,7 @@ async function jellyWindow() {
   await new Promise(r => win.webContents.once('did-finish-load', r));
   /* The desktop behind it, and the jelly kept to the work area. */
   await win.webContents.insertCSS(`
-    html, body { background: #000 ${BACKDROP} center / cover no-repeat !important; }
+    html, body { background: ${GROUND} !important; }
     #root { position: fixed !important; top: ${MENU}px; left: 0; right: 0; bottom: ${DOCK}px; height: auto !important; }
     #root > div:first-child { width: 100% !important; height: 100% !important; }
   `);

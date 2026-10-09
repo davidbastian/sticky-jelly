@@ -43,6 +43,8 @@ Esc or × lets it go, and it gathers itself back into a blob as it falls.
 
 Type and press Enter: the message box jiggles, three little drops bounce while it thinks, and the answer arrives word by word, each word dropping in like a blob landing. Its mouth moves while it talks.
 
+It sounds the part, too — all synthesised, like its splats and pops: a bubble as your message leaves, little gurgles while it thinks, a babble of blips as the words land, a pop when it's done, and a sound for each thing its body does. Turn it up, down or off with **Chat Sounds** in Settings › Sound.
+
 When it writes an action — *wiggles*, *bounces*, *blushes*, *spins*, *shivers*, *melts a little* — there are no asterisks on screen. The action becomes a little tag that moves the way it reads, and the jelly's body does the real thing at the same moment.
 
 <p align="center">
