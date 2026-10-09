@@ -781,6 +781,45 @@ export default function StickyJellyProject({
       }
     };
 
+    // The hold: a hum that climbs and wobbles faster as the charge builds —
+    // it is getting dizzy — and a burst when it becomes the sidebar.
+    let hum: { osc: OscillatorNode; lfo: OscillatorNode; depth: GainNode; gain: GainNode } | null = null;
+    const humUpdate = (c: number, holding: boolean) => {
+      if (!audioCtx) return;
+      const t = audioCtx.currentTime;
+      if (!hum && holding && c > 0.14 && cfg.sndOn && cfg.sndChat > 0) {
+        const osc = audioCtx.createOscillator(); osc.type = 'triangle';
+        const lfo = audioCtx.createOscillator();
+        const depth = audioCtx.createGain();
+        const gain = audioCtx.createGain(); gain.gain.value = 0;
+        lfo.connect(depth); depth.connect(osc.frequency);
+        osc.connect(gain); gain.connect(master);
+        osc.start(); lfo.start();
+        hum = { osc, lfo, depth, gain };
+      }
+      if (!hum) return;
+      if (!holding) { humStop(); return; }
+      hum.osc.frequency.setTargetAtTime(150 + Math.pow(c, 1.5) * 760, t, 0.03);
+      hum.lfo.frequency.setTargetAtTime(5 + c * 24, t, 0.03);
+      hum.depth.gain.setTargetAtTime(15 + c * 70, t, 0.03);
+      hum.gain.gain.setTargetAtTime((0.05 + c * 0.2) * cfg.sndChat, t, 0.03);
+    };
+    const humStop = () => {
+      if (!hum || !audioCtx) return;
+      const t = audioCtx.currentTime;
+      hum.gain.gain.setTargetAtTime(0, t, 0.04);
+      hum.osc.stop(t + 0.25); hum.lfo.stop(t + 0.25);
+      hum = null;
+    };
+    const burstSound = () => {
+      humStop();
+      if (!audioCtx || !cfg.sndOn || cfg.sndChat <= 0) return;
+      whoosh(0.5, 0.28);
+      tone({ f0: 260, f1: 1100, dur: 0.22, vol: 0.4 });
+      tone({ f0: 1568, dur: 0.4, vol: 0.12, at: 0.12 });
+      tone({ f0: 2093, dur: 0.45, vol: 0.1, at: 0.2 });
+    };
+
     const playSplat = (impact: number) => {
       if (!audioCtx || !noiseBuf || !cfg.sndOn || cfg.sndStick <= 0) return;
       const t = audioCtx.currentTime;
@@ -1421,6 +1460,7 @@ export default function StickyJellyProject({
       if (actKind && (actLeft -= dt) <= 0) { actKind = ''; actLeft = 0; }
       // Builds while held; let go (or burst) and it settles back over ~¼s.
       charge = holdAt ? Math.min(1, (now - holdAt) / HOLD_MS) : Math.max(0, charge - dt * 4);
+      humUpdate(charge, !!holdAt);
       if (holdAt && now - holdAt > HOLD_MS && pts.length) summon();
       if (rest.current && pts.length) checkRest(now);
       renderer.render(scene, camera);
@@ -1496,6 +1536,7 @@ export default function StickyJellyProject({
 
     function summon() {
       holdAt = 0;
+      burstSound();
       if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = 'grab'; }
       const c = centroid();
       const right = c.x > W / 2;
