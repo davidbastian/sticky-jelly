@@ -27,7 +27,7 @@ Everywhere you are not touching it, your desktop works normally — the window o
 
 Every point on the body grabs the edge it touches and holds until the pull beats its stickiness, then lets go one point at a time — so peeling it off a corner feels like peeling, not like a release.
 
-It has moods: every few seconds the face changes — teeth, an arc of extra eyes, a cyclops, sleepy lids, a surprised O. The eyes follow your cursor a little late. It splats when it lands, pops as it peels and creaks while you stretch it, all synthesised; there are no audio files in here.
+It has moods: every few seconds the face changes — teeth, an arc of extra eyes, a cyclops, sleepy lids, a surprised O. The eyes follow your cursor a little late. It splats when it lands, pops as it peels, creaks while you stretch it and squeaks like a wet finger on glass when it slides along an edge — all synthesised; there are no audio files in here.
 
 ## Hold it to open the chat
 
@@ -50,6 +50,21 @@ When it writes an action — *wiggles*, *bounces*, *blushes*, *spins*, *shivers*
 <p align="center">
   <img src="media/chat.gif" width="800" alt="A question typed and sent; the reply streams in with a 'wiggles happily' tag while the whole body wiggles">
 </p>
+
+## It can do things on your Mac
+
+Ask, and it does it — each step shows up in the chat as it happens:
+
+- **Apps, folders and files** — "open Figma", "show me my Downloads", "open the last PDF I downloaded".
+- **Finding things** — "where's the Moët deck?", "screenshots from this week" (Spotlight, newest first).
+- **Tidying up** — "sort my Desktop into folders by type", "put the screenshots in a Screenshots folder".
+- **Your calendar and reminders** — "what's on tomorrow?", "add lunch with Ana on Friday at 1", "remind me to call the studio at 5".
+- **Little things** — timers (it bounces when they're up), volume, dark mode, the clipboard.
+- **The web** — "what's the weather in Barcelona?"
+
+Anything that changes something — moving files, adding an event or a reminder — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. macOS asks once for Calendars and Reminders the first time they're used.
+
+**New chat** clears the slate in the most jelly way: it eats the conversation, every message sucked up into its mouth with a munch, and a gulp at the end.
 
 ## Talk to it
 
@@ -109,7 +124,7 @@ npm run dist    # package Sticky Jelly.app and a .dmg into release/
 npm run demo    # re-record the GIFs in this README (needs ffmpeg)
 ```
 
-The listening is done by a small Swift helper, `desktop/listen/listen.swift`, built by `npm run build:listen` as part of `start` and `dist`; it needs the Xcode command-line tools. The app is Apple-silicon only and not signed, so on another Mac it opens with right-click › Open the first time.
+Listening and the calendar are done by two small Swift helpers, `desktop/listen/listen.swift` and `desktop/calendar/calendar.swift`, built by `npm run build:native` as part of `start` and `dist`; they need the Xcode command-line tools. The things it can do on your Mac are in `desktop/tools.cjs`. The app is Apple-silicon only and not signed, so on another Mac it opens with right-click › Open the first time.
 
 ## How it works
 

@@ -14,8 +14,20 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { actionKind, type ChatSound, type JellyAction, type SidebarState } from './StickyJelly';
 
-/* fresh: written during this visit, so its words get the drop-in. */
-interface Line { role: 'user' | 'assistant'; text: string; error?: boolean; fresh?: boolean }
+/* fresh: written during this visit, so its words get the drop-in. A 'tool'
+   line is something it did on the Mac; a 'confirm' line is a change waiting
+   for the user's yes or no. */
+interface Line {
+  role: 'user' | 'assistant' | 'tool' | 'confirm';
+  text: string;
+  error?: boolean;
+  fresh?: boolean;
+  id?: string | number;
+  state?: string;
+  plan?: Plan;
+}
+interface Plan { title: string; lines: { from: string; to: string }[]; action: string }
+type ToolEvent = { id: string; label: string; state: 'running' | 'done' | 'error' | 'declined' };
 
 interface ChatApi {
   send: (text: string) => Promise<{ ok?: boolean; error?: string; stopped?: boolean }>;
@@ -24,6 +36,9 @@ interface ChatApi {
   reset: () => void;
   transcript: () => Promise<{ role: 'user' | 'assistant'; text: string }[]>;
   prefs: () => Promise<{ speak: boolean }>;
+  onTool?: (fn: (t: ToolEvent) => void) => () => void;
+  onConfirm?: (fn: (c: Plan & { id: number }) => void) => () => void;
+  confirm?: (id: number, ok: boolean) => void;
 }
 
 type VoiceEvent =
@@ -70,6 +85,9 @@ function spoken(text: string) {
     .replace(/`/g, '')
     .replace(/^\s*-\s+/gm, '');
 }
+
+/* Where the face sits once the chat has content (StickyJelly's FACE_TOP). */
+const FACE_TOP = 124;
 
 /* Light text on a dark body, dark text on a light one. */
 function ink(hex: string) {
@@ -193,6 +211,31 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
       const last = fn(l[l.length - 1]);
       return last ? [...l.slice(0, -1), last] : l.slice(0, -1);
     });
+    /* Text goes on the reply being written; after a tool or a card, a new one. */
+    const appendText = (d: string) => setLines(l => {
+      const last = l[l.length - 1];
+      if (last?.role === 'assistant' && last.fresh && !last.error) return [...l.slice(0, -1), { ...last, text: last.text + d }];
+      return [...l, { role: 'assistant', text: d, fresh: true }];
+    });
+    /* A tool line replaces the empty "thinking" reply it interrupts. */
+    const withoutPending = (l: Line[]) => {
+      const last = l[l.length - 1];
+      return last?.role === 'assistant' && !last.text ? l.slice(0, -1) : l;
+    };
+    const offTool = api.onTool?.(t => {
+      clearTimeout(gurgle);
+      setLines(l => {
+        const at = l.findIndex(x => x.role === 'tool' && x.id === t.id);
+        if (at >= 0) return l.map((x, k) => (k === at ? { ...x, text: t.label, state: t.state } : x));
+        return [...withoutPending(l), { role: 'tool', id: t.id, text: t.label, state: t.state }];
+      });
+      if (t.state === 'done') onSound?.('think');
+    });
+    const offConfirm = api.onConfirm?.(cnf => {
+      clearTimeout(gurgle);
+      onSound?.('think');
+      setLines(l => [...withoutPending(l), { role: 'confirm', id: cnf.id, text: cnf.title, state: 'open', plan: cnf }]);
+    });
 
     // Talk back only when talked to, and only if that is switched on.
     const talkBack = spokenText !== undefined && (await api.prefs()).speak;
@@ -224,7 +267,7 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
         words.forEach((_, k) => window.setTimeout(() => onSound?.('word'), k * 55));
       }
       acc += d;
-      appendLast(line => ({ ...line, text: line.text + d }));
+      appendText(d);
       // Act out every action as soon as its closing asterisk lands.
       const acts = [...acc.replace(/\*\*([^*\n]+)\*\*/g, '$1').matchAll(ACT)];
       for (; fired < acts.length; fired++) {
@@ -236,13 +279,22 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
     });
     const res = await api.send(text);
     off();
+    offTool?.();
+    offConfirm?.();
     clearTimeout(gurgle);
+    // Any card still waiting was answered "no" by stopping.
+    setLines(l => l.map(x => (x.role === 'confirm' && x.state === 'open' ? { ...x, state: 'no' } : x)));
     if (!res.error && !res.stopped) onSound?.('done');
     out.streaming = false;
     if (talkBack && !res.error && !res.stopped) speakUpTo(true);
     if (!out.queued) onTalking?.(false);
-    if (res.error) appendLast(line => ({ ...line, text: res.error!, error: true, fresh: false }));
-    else if (res.stopped) appendLast(line => (line.text ? line : null));
+    if (res.error) {
+      setLines(l => {
+        const last = l[l.length - 1];
+        const err: Line = { role: 'assistant', text: res.error!, error: true };
+        return last?.role === 'assistant' && !last.text ? [...l.slice(0, -1), err] : [...l, err];
+      });
+    } else if (res.stopped) appendLast(line => (line.role === 'assistant' && !line.text ? null : line));
     setBusy(false);
     input.current?.focus();
   }
@@ -283,12 +335,45 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
     shush();
   }
 
+  /*
+   * New chat: it eats the conversation. Every message is sucked up into its
+   * mouth, top first, shrinking and spinning as it goes, while it chomps —
+   * then a gulp, and the page is clean.
+   */
+  const [eating, setEating] = useState(false);
   function newChat() {
+    if (eating) return;
     stopAll();
-    onSound?.('new');
     api.reset();
-    setLines([]);
-    input.current?.focus();
+    const log = scroller.current;
+    const rows = log ? [...log.children] as HTMLElement[] : [];
+    if (!rows.length || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onSound?.('new');
+      setLines([]);
+      input.current?.focus();
+      return;
+    }
+    // Where the mouth is, relative to each message.
+    const rootBox = log!.closest('.jelly-chat')!.getBoundingClientRect();
+    const mouth = { x: rootBox.left + rootBox.width / 2, y: rootBox.top + FACE_TOP + 30 };
+    const visible = rows.filter(r => { const b = r.getBoundingClientRect(); const lb = log!.getBoundingClientRect(); return b.bottom > lb.top && b.top < lb.bottom; });
+    visible.forEach((r, k) => {
+      const b = r.getBoundingClientRect();
+      r.style.setProperty('--dx', `${mouth.x - (b.left + b.width / 2)}px`);
+      r.style.setProperty('--dy', `${mouth.y - (b.top + b.height / 2)}px`);
+      r.style.setProperty('--spin', `${(k % 2 ? 1 : -1) * (90 + Math.random() * 120)}deg`);
+      r.style.animationDelay = `${k * 0.07}s`;
+      window.setTimeout(() => onSound?.('munch'), k * 70 + 260);
+    });
+    setEating(true);
+    onTalking?.(true);
+    window.setTimeout(() => {
+      onTalking?.(false);
+      onSound?.('gulp');
+      setLines([]);
+      setEating(false);
+      input.current?.focus();
+    }, Math.min(1400, visible.length * 70 + 560));
   }
 
   const empty = lines.length === 0;
@@ -363,7 +448,7 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
       ) : (
         <div
           ref={scroller}
-          className={`log${scrolling ? ' scrolling' : ''}`}
+          className={`log${scrolling ? ' scrolling' : ''}${eating ? ' eating' : ''}`}
           onScroll={() => {
             setScrolling(true);
             clearTimeout(scrollTimer.current);
@@ -374,7 +459,20 @@ export default function Chat({ state, api, voice, onClose, onFaceTop, onTalking,
             display: 'flex', flexDirection: 'column', gap: 12,
           }}
         >
-          {lines.map((l, i) => l.role === 'user' ? (
+          {lines.map((l, i) => l.role === 'tool' ? (
+            <ToolChip key={i} label={l.text} state={l.state as ToolEvent['state']} />
+          ) : l.role === 'confirm' ? (
+            <ConfirmCard
+              key={i}
+              plan={l.plan!}
+              state={l.state!}
+              onAnswer={(ok) => {
+                api.confirm?.(l.id as number, ok);
+                setLines(ls => ls.map(x => (x === l ? { ...x, state: ok ? 'yes' : 'no' } : x)));
+                onSound?.(ok ? 'send' : 'done');
+              }}
+            />
+          ) : l.role === 'user' ? (
             <div key={i} className="bubble" style={{
               alignSelf: 'flex-end', maxWidth: '85%', background: c.fill,
               padding: '8px 13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -512,6 +610,54 @@ function Action({ text }: { text: string }) {
         <span key={i} aria-hidden="true" style={{ animationDelay: `${i * 0.045}s` }}>{ch}</span>
       ))}
     </span>
+  );
+}
+
+/* Something it did on the Mac: a little blob that wobbles while it works. */
+function ToolChip({ label, state }: { label: string; state: ToolEvent['state'] }) {
+  const mark = state === 'done' ? '✓' : state === 'error' ? '!' : state === 'declined' ? '–' : '';
+  return (
+    <div className={`tool tool-${state}`} role="status">
+      <span className="tool-dot" aria-hidden="true">{mark}</span>
+      <span>{label}{state === 'running' ? '…' : state === 'declined' ? ' — skipped' : state === 'error' ? ' — didn’t work' : ''}</span>
+    </div>
+  );
+}
+
+/* A move reads best as "file → where it goes": the same name in a new
+   folder shows just the folder; a rename in place shows just the names. */
+function readable({ from, to }: { from: string; to: string }) {
+  const name = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+  const dir = (p: string) => p.slice(0, p.lastIndexOf('/') + 1);
+  if (!from.includes('/') || (to !== 'Trash' && !to.includes('/'))) return { from, to };
+  if (to === 'Trash') return { from: name(from), to: 'Trash' };
+  if (name(from) === name(to)) return { from: name(from), to: dir(to) };
+  if (dir(from) === dir(to)) return { from: name(from), to: name(to) };
+  return { from: name(from), to };
+}
+
+/* A change waiting for a yes: what would happen, and the two answers. */
+function ConfirmCard({ plan, state, onAnswer }: { plan: Plan; state: string; onAnswer: (ok: boolean) => void }) {
+  const shown = plan.lines.slice(0, 8).map(readable);
+  const more = plan.lines.length - shown.length;
+  return (
+    <div className={`card card-is-${state}`}>
+      <div className="card-title">{plan.title}</div>
+      <ul>
+        {shown.map((l, k) => (
+          <li key={k}><span className="from">{l.from}</span><span className="arrow" aria-label="to">→</span><span className="to">{l.to}</span></li>
+        ))}
+        {more > 0 && <li className="more">and {more} more</li>}
+      </ul>
+      {state === 'open' ? (
+        <div className="card-actions">
+          <button className="card-no" onClick={() => onAnswer(false)}>Not now</button>
+          <button className="card-yes" onClick={() => onAnswer(true)}>{plan.action}</button>
+        </div>
+      ) : (
+        <div className="card-answer">{state === 'yes' ? 'Done ✓' : 'Skipped'}</div>
+      )}
+    </div>
   );
 }
 
@@ -761,6 +907,61 @@ const GOO_CSS = `
   0%, 100% { transform: translateY(0) scale(1.15, 0.85); }
   45%      { transform: translateY(-9px) scale(0.85, 1.15); }
 }
+.jelly-chat .tool {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px 5px 6px; border-radius: 999px; font-size: 12.5px;
+  background: color-mix(in srgb, var(--blob) 9%, transparent);
+  color: color-mix(in srgb, var(--blob) 80%, transparent);
+  animation: jelly-pop 0.45s cubic-bezier(0.3, 1.7, 0.5, 1) both;
+}
+.jelly-chat .tool-dot {
+  width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--blob); color: var(--ink); font-size: 11px; font-weight: 700;
+}
+.jelly-chat .tool-running .tool-dot { animation: tool-wobble 0.9s ease-in-out infinite; }
+.jelly-chat .tool-error .tool-dot { background: #ff8a7a; }
+.jelly-chat .tool-declined { opacity: 0.6; }
+@keyframes tool-wobble {
+  0%, 100% { border-radius: 50%; transform: scale(1); }
+  33% { border-radius: 60% 40% 55% 45%; transform: scale(1.12, 0.9); }
+  66% { border-radius: 42% 58% 45% 55%; transform: scale(0.92, 1.1); }
+}
+
+.jelly-chat .card {
+  border-radius: 18px; padding: 12px 14px;
+  background: color-mix(in srgb, var(--blob) 10%, transparent);
+  animation: jelly-pop 0.5s cubic-bezier(0.3, 1.7, 0.5, 1) both;
+}
+.jelly-chat .card-title { font-weight: 600; margin-bottom: 6px; }
+.jelly-chat .card ul { list-style: none; margin: 0 0 10px; padding: 0; font-size: 12.5px; display: grid; gap: 3px; }
+.jelly-chat .card li { display: flex; gap: 6px; min-width: 0; color: color-mix(in srgb, var(--blob) 85%, transparent); }
+.jelly-chat .card .from { flex: 1 1 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jelly-chat .card .to { flex: 1 1 50%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+.jelly-chat .card .arrow { flex: none; opacity: 0.5; }
+.jelly-chat .card .more { opacity: 0.6; }
+.jelly-chat .card-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.jelly-chat .card-actions button {
+  font: inherit; font-size: 13px; font-weight: 600; border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer;
+  transition: scale 0.45s cubic-bezier(0.3, 1.9, 0.5, 1);
+}
+.jelly-chat .card-actions button:hover { scale: 1.08; }
+.jelly-chat .card-actions button:active { scale: 0.9; transition-duration: 0.1s; }
+.jelly-chat .card-yes { background: var(--blob); color: var(--ink); }
+.jelly-chat .card-no { background: color-mix(in srgb, var(--blob) 14%, transparent); color: var(--blob); }
+.jelly-chat .card-answer { font-size: 12px; opacity: 0.6; text-align: right; }
+.jelly-chat .card-is-no { opacity: 0.55; }
+
+/* Eaten: every message is pulled into the mouth, shrinking and spinning. */
+.jelly-chat .log.eating { overflow: visible; -webkit-mask-image: none; mask-image: none; }
+.jelly-chat .log.eating > * {
+  animation: jelly-eaten 0.55s cubic-bezier(0.55, 0, 0.8, 0.4) both !important;
+}
+@keyframes jelly-eaten {
+  0%   { transform: none; opacity: 1; }
+  25%  { transform: translate(calc(var(--dx) * -0.04), calc(var(--dy) * -0.04)) scale(1.05, 0.92); opacity: 1; }
+  100% { transform: translate(var(--dx), var(--dy)) scale(0.04) rotate(var(--spin)); opacity: 0.2; }
+}
+
 @keyframes jelly-send {
   0%   { translate: 0 0; scale: 1 1; }
   14%  { translate: -5px 1px; scale: 1.03 0.9; }
@@ -786,6 +987,7 @@ const GOO_CSS = `
   .jelly-chat .wob-a, .jelly-chat .wob-b, .jelly-chat .wob-wide,
   .jelly-chat .drop, .jelly-chat .bubble, .jelly-chat .composer.ooze, .jelly-chat .ooze .neck,
   .jelly-chat .composer.shake > *, .jelly-chat .word, .jelly-chat .thinking i,
-  .jelly-chat .hint span, .jelly-chat .act, .jelly-chat .act > span { animation: none; }
+  .jelly-chat .hint span, .jelly-chat .act, .jelly-chat .act > span,
+  .jelly-chat .tool, .jelly-chat .tool-dot, .jelly-chat .card { animation: none; }
 }
 `;

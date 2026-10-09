@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('jelly', {
   hover: (over) => ipcRenderer.send('jelly:hover', !!over),
   rest: (rects) => ipcRenderer.send('jelly:rest', rects),
   focus: () => ipcRenderer.send('jelly:focus'),
+  /* Something happened while you weren't looking (a timer ended). */
+  onPing: (fn) => {
+    const on = (_e, p) => fn(p);
+    ipcRenderer.on('jelly:ping', on);
+    return () => ipcRenderer.off('jelly:ping', on);
+  },
   chat: {
     send: (text) => ipcRenderer.invoke('chat:send', text),
     onDelta: (fn) => {
@@ -25,6 +31,17 @@ contextBridge.exposeInMainWorld('jelly', {
     reset: () => ipcRenderer.send('chat:reset'),
     transcript: () => ipcRenderer.invoke('chat:transcript'),
     prefs: () => ipcRenderer.invoke('chat:prefs'),
+    onTool: (fn) => {
+      const on = (_e, t) => fn(t);
+      ipcRenderer.on('chat:tool', on);
+      return () => ipcRenderer.off('chat:tool', on);
+    },
+    onConfirm: (fn) => {
+      const on = (_e, c) => fn(c);
+      ipcRenderer.on('chat:confirm', on);
+      return () => ipcRenderer.off('chat:confirm', on);
+    },
+    confirm: (id, ok) => ipcRenderer.send('chat:confirm-reply', id, !!ok),
   },
   voice: {
     start: () => ipcRenderer.send('voice:start'),

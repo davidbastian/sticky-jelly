@@ -184,15 +184,40 @@ ipcMain.on('settings:console', () => shell.openExternal('https://console.anthrop
  * The chat. One turn at a time: text streams back to the jelly window as it
  * arrives, and the call resolves when the reply is done (or failed).
  */
+/*
+ * Approvals: a tool that would change something asks here; the page shows the
+ * plan as a card and answers through chat:confirm-reply. Stopping (or closing
+ * the chat) answers every open card with no.
+ */
+const approvals = new Map();
+let approvalId = 0;
+function settleApprovals() {
+  for (const resolve of approvals.values()) resolve(false);
+  approvals.clear();
+}
+ipcMain.on('chat:confirm-reply', (_e, id, ok) => {
+  const resolve = approvals.get(id);
+  if (resolve) { approvals.delete(id); resolve(!!ok); }
+});
+
 ipcMain.handle('chat:send', (e, text) => {
   if (typeof text !== 'string' || !text.trim()) return { error: 'Nothing to send.' };
   const model = saved.__model || assistant.defaultModel;
-  return assistant.send(text, model, (delta) => {
-    if (!e.sender.isDestroyed()) e.sender.send('chat:delta', delta);
+  const send = (channel, payload) => { if (!e.sender.isDestroyed()) e.sender.send(channel, payload); };
+  return assistant.send(text, model, {
+    onDelta: (delta) => send('chat:delta', delta),
+    onTool: (t) => send('chat:tool', t),
+    confirm: (plan) => new Promise((resolve) => {
+      const id = ++approvalId;
+      approvals.set(id, resolve);
+      send('chat:confirm', { id, ...plan });
+    }),
+    /* A timer went off: the jelly bounces, even with the chat closed. */
+    onTimer: (label) => win?.webContents.send('jelly:ping', { kind: 'bounce', label }),
   });
 });
-ipcMain.on('chat:stop', () => assistant.stop());
-ipcMain.on('chat:reset', () => assistant.reset());
+ipcMain.on('chat:stop', () => { settleApprovals(); assistant.stop(); });
+ipcMain.on('chat:reset', () => { settleApprovals(); assistant.reset(); });
 ipcMain.handle('chat:prefs', () => ({ speak: saved.__speak !== false }));
 
 /*

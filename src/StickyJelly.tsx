@@ -83,7 +83,7 @@ export interface SidebarControl {
   sound: (kind: ChatSound) => void;
 }
 
-export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | JellyAction;
+export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | 'munch' | 'gulp' | JellyAction;
 
 export type JellyAction = 'wiggle' | 'bounce' | 'blush' | 'spin' | 'shiver' | 'melt';
 
@@ -256,6 +256,7 @@ export default function StickyJellyProject({
       sndPeelStyle:    'Pop',     // 'Pop' | 'Tick' | 'Pluck' | 'Velcro'
       sndPeel:         0.5,       // pop when points peel off
       sndChat:         0.6,       // the chat: send, thinking, babble, actions
+      sndSlide:        0.5,       // squeak, like a wet finger on glass, sliding along an edge
     };
 
     const isWorm = () => cfg.shape === 'Worm';
@@ -349,6 +350,7 @@ export default function StickyJellyProject({
     fSnd.add(cfg, 'sndPeelStyle', ['Pop', 'Tick', 'Pluck', 'Velcro']).name('Peel Style');
     fSnd.add(cfg, 'sndPeel',   0, 1, 0.01).name('Peel Volume');
     fSnd.add(cfg, 'sndChat',   0, 1, 0.01).name('Chat Sounds');
+    fSnd.add(cfg, 'sndSlide',  0, 1, 0.01).name('Slide Squeak');
 
     const controllers = new Map(gui.controllersRecursive().map(c => [c.property, c]));
     const unbindSettings = settings.current?.({
@@ -575,6 +577,10 @@ export default function StickyJellyProject({
     let dragFilter!: BiquadFilterNode;
     let rubberGain!: GainNode;     // 'Rubber' bed — low sawtooth growl
     let rubberOsc!: OscillatorNode;
+    // The squeak bed: a bright saw through a narrow band, silent until it slides.
+    let squeakOsc!: OscillatorNode;
+    let squeakBand!: BiquadFilterNode;
+    let squeakGain!: GainNode;
     let noiseBuf: AudioBuffer | null = null;
     let lastSplat = 0, lastPeel = 0;
     let nextStretchEvt = 0;        // scheduler for 'Bubbles'/'Zipper' stretch styles
@@ -612,6 +618,17 @@ export default function StickyJellyProject({
       rubberGain.gain.value = 0;
       rubberOsc.connect(rubberLp); rubberLp.connect(rubberGain); rubberGain.connect(master);
       rubberOsc.start();
+      squeakOsc = audioCtx.createOscillator();
+      squeakOsc.type = 'sawtooth';
+      squeakOsc.frequency.value = 1100;
+      squeakBand = audioCtx.createBiquadFilter();
+      squeakBand.type = 'bandpass';
+      squeakBand.frequency.value = 1500;
+      squeakBand.Q.value = 9;
+      squeakGain = audioCtx.createGain();
+      squeakGain.gain.value = 0;
+      squeakOsc.connect(squeakBand); squeakBand.connect(squeakGain); squeakGain.connect(master);
+      squeakOsc.start();
     };
 
     // Short one-shots used by the event-based stretch styles
@@ -765,6 +782,14 @@ export default function StickyJellyProject({
           tone({ f0: 500, f1: 1100, dur: 0.09, vol: 0.22, at: 0.12 });
           tone({ f0: 760, f1: 1500, dur: 0.09, vol: 0.18, at: 0.2 });
           break;
+        case 'munch':
+          // One mouthful: a soft, low, slightly squelchy chomp.
+          tone({ type: 'triangle', f0: 210 + Math.random() * 90, f1: 120, dur: 0.09, vol: 0.3, lp: 900 });
+          break;
+        case 'gulp':
+          tone({ f0: 300, f1: 85, dur: 0.3, vol: 0.45, lp: 700 });
+          tone({ f0: 900, f1: 1300, dur: 0.08, vol: 0.15, at: 0.3 });
+          break;
         case 'close':
           // Letting go: a deflating slide down as it falls back into a blob.
           tone({ f0: 720, f1: 130, dur: 0.42, vol: 0.38, vib: [7, 18] });
@@ -894,6 +919,7 @@ export default function StickyJellyProject({
 
     // Per-frame physics event accumulators consumed by the audio layer
     let stickNew = 0, peelNew = 0, stickImpact = 0;
+    let edgeSlide = 0;   // how far points near an edge moved along it, summed over the frame
 
     // ── Pointer ──────────────────────────────────────────────────────────────
     const ac = new AbortController();
@@ -1142,6 +1168,12 @@ export default function StickyJellyProject({
         const nearEdge =
           p.x - mrg < sd || (W - mrg) - p.x < sd ||
           p.y - mrg < sd || (H - mrg) - p.y < sd;
+        // Sliding along an edge (not into or away from it) is what squeaks.
+        if (nearEdge && !side) {
+          const onSide = p.x - mrg < sd || (W - mrg) - p.x < sd;
+          const onFloorOrTop = p.y - mrg < sd || (H - mrg) - p.y < sd;
+          edgeSlide += (onSide ? Math.abs(p.y - p.py) : 0) + (onFloorOrTop ? Math.abs(p.x - p.px) : 0);
+        }
 
         if (touched && cfg.friction > 0) {
           // Kill part of the tangential slide so it doesn't skate along edges
@@ -1380,6 +1412,7 @@ export default function StickyJellyProject({
     // ── Loop ─────────────────────────────────────────────────────────────────
     let lastT = performance.now();
     let acc = 0;
+    let stepsThisFrame = 0;
 
     const animate = () => {
       animId = requestAnimationFrame(animate);
@@ -1388,12 +1421,14 @@ export default function StickyJellyProject({
       lastT = now;
 
       acc += dt;
+      stepsThisFrame = 0;
       if (pts.length) {
         let steps = 0;
         while (acc > STEP && steps < 4) {
           step(now / 1000);
           acc -= STEP;
           steps++;
+          stepsThisFrame++;
         }
         if (steps === 4) acc = 0; // drop backlog after a long frame (tab switch)
         updateFace(dt);
@@ -1428,6 +1463,19 @@ export default function StickyJellyProject({
         dragGain.gain.setTargetAtTime(creakG, t, 0.06);
         dragFilter.frequency.setTargetAtTime(250 + tension * 950, t, 0.06);
         rubberGain.gain.setTargetAtTime(rubberG, t, 0.06);
+
+        // Squeak: like a wet finger dragged across glass. Louder and higher
+        // the faster it slides along an edge, and never quite steady — the
+        // stick-slip flutter is what makes it a squeak rather than a whistle.
+        const slide = edgeSlide / dpr / Math.max(1, stepsThisFrame);
+        // Resting it reads 0 (its points are stuck); a brisk drag along the
+        // floor averages ~5 and peaks ~60.
+        const lvl = Math.min(1, Math.max(0, (slide - 2) / 24));
+        const flutter = 0.45 + Math.random() * 0.55;
+        squeakGain.gain.setTargetAtTime(Math.pow(lvl, 0.8) * 0.22 * cfg.sndSlide * flutter, t, 0.012);
+        const pitch = 850 + lvl * 1500 + (Math.random() - 0.5) * 140;
+        squeakOsc.frequency.setTargetAtTime(pitch, t, 0.02);
+        squeakBand.frequency.setTargetAtTime(pitch * 1.35, t, 0.02);
         rubberOsc.frequency.setTargetAtTime(55 + tension * 130, t, 0.06);
         if (tension > 0.04 && t >= nextStretchEvt) {
           if (style === 'Bubbles') {
@@ -1439,7 +1487,7 @@ export default function StickyJellyProject({
           }
         }
       }
-      stickNew = 0; peelNew = 0; stickImpact = 0;
+      stickNew = 0; peelNew = 0; stickImpact = 0; edgeSlide = 0;
 
       /* No ground to recolour when the window is the ground. */
       if (scene.background) (scene.background as THREE.Color).set(cfg.bgColor);

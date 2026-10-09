@@ -14,11 +14,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "app": "npm run build:listen && electron desktop/main.cjs",
-    "start": "npm run build:listen && vite build && electron desktop/main.cjs",
-    "dist": "npm run build:listen && vite build && electron-builder",
+    "app": "npm run build:native && electron desktop/main.cjs",
+    "start": "npm run build:native && vite build && electron desktop/main.cjs",
+    "dist": "npm run build:native && vite build && electron-builder",
     "build:listen": "swiftc -O -o desktop/bin/jelly-listen desktop/listen/listen.swift",
-    "demo": "vite build && electron scripts/demo/record.cjs"
+    "demo": "vite build && electron scripts/demo/record.cjs",
+    "build:calendar": "swiftc -O -o desktop/bin/jelly-calendar desktop/calendar/calendar.swift",
+    "build:native": "npm run build:listen && npm run build:calendar"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
@@ -43,7 +45,8 @@
     "files": [
       "dist/**",
       "desktop/**",
-      "!desktop/listen/**"
+      "!desktop/listen/**",
+      "!desktop/calendar/**"
     ],
     "mac": {
       "category": "public.app-category.entertainment",
@@ -52,9 +55,13 @@
       ],
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSAppleEventsUsageDescription": "Sticky Jelly asks Finder to move desktop icons out from under the creature, and puts them back when it leaves.",
+        "NSAppleEventsUsageDescription": "Sticky Jelly asks Finder to move desktop icons out from under the creature, and System Events to switch dark mode when you ask it to.",
         "NSMicrophoneUsageDescription": "Sticky Jelly listens when you press its microphone, so you can talk to it.",
-        "NSSpeechRecognitionUsageDescription": "Sticky Jelly turns what you say into text, on your Mac, so you can talk to it."
+        "NSSpeechRecognitionUsageDescription": "Sticky Jelly turns what you say into text, on your Mac, so you can talk to it.",
+        "NSCalendarsFullAccessUsageDescription": "Sticky Jelly reads your calendar when you ask what's coming up, and adds events you approve.",
+        "NSCalendarsUsageDescription": "Sticky Jelly reads your calendar when you ask what's coming up, and adds events you approve.",
+        "NSRemindersFullAccessUsageDescription": "Sticky Jelly reads your reminders when you ask, and adds the ones you approve.",
+        "NSRemindersUsageDescription": "Sticky Jelly reads your reminders when you ask, and adds the ones you approve."
       }
     },
     "copyright": "© 2026 David Bastian",

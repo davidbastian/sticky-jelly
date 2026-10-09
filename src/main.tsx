@@ -14,7 +14,7 @@
  *   onSidebar     press and hold, and it stretches into a sidebar with a chat
  *                 on it
  */
-import { StrictMode, useCallback, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import StickyJelly, {
   type Rect, type SettingsBridge, type SidebarControl, type SidebarState,
@@ -28,6 +28,7 @@ declare global {
       rest: (rects: Rect[]) => void;
       settings: (schema: SettingsBridge['schema'], set: SettingsBridge['set']) => () => void;
       focus: () => void;
+      onPing?: (fn: (p: { kind: string; label?: string }) => void) => () => void;
       chat: Parameters<typeof Chat>[0]['api'];
       voice?: VoiceApi;
     };
@@ -37,6 +38,14 @@ declare global {
 function Desktop() {
   const [sidebar, setSidebar] = useState<SidebarState | null>(null);
   const control = useRef<SidebarControl | null>(null);
+
+  /* A timer it set went off: it bounces, wherever it is. */
+  useEffect(() => {
+    return window.jelly?.onPing?.(() => {
+      control.current?.act('bounce');
+      control.current?.sound('bounce');
+    });
+  }, []);
 
   const open = useRef(false);
   const onSidebar = useCallback((s: SidebarState | null) => {
