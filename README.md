@@ -10,16 +10,20 @@
 </p>
 
 <p align="center">
-  <img src="media/fling.gif" width="720" alt="The jelly is grabbed off the floor, thrown at the left wall where it sticks, then peeled off again">
+  <img src="media/desktop-stick.gif" width="900" alt="Sticky Jelly opened from Launchpad: the black jelly drops onto the desktop, is thrown around and sticks to the edges of the screen">
 </p>
 
 Everywhere you are not touching it, your desktop works normally — the window only takes the mouse where the creature actually is.
 
-> The demos are recorded on black with the jelly in red so it shows up here. On your desktop it sits on your wallpaper, and it is black unless you change it.
+> The two recordings on a real desktop show it as it is. The close-ups further down are recorded on black with the jelly in red, so the details show up here.
 
 ---
 
 ## Grab it, fling it, watch it stick
+
+<p align="center">
+  <img src="media/fling.gif" width="720" alt="The jelly is grabbed off the floor, thrown at the left wall where it sticks, then peeled off again">
+</p>
 
 Every point on the body grabs the edge it touches and holds until the pull beats its stickiness, then lets go one point at a time — so peeling it off a corner feels like peeling, not like a release.
 
@@ -30,7 +34,7 @@ It has moods: every few seconds the face changes — teeth, an arc of extra eyes
 Press and hold the jelly for a moment. It winds itself up — shaking harder, swelling, rolling its eyes and running through colours faster and faster, dizzy — then bursts up the nearer side of the screen into a tall sidebar, still a soft body the whole way. Its face sits in the middle with the question curved under it like a smile, and the message box oozes out of the bottom as a drop of the body itself.
 
 <p align="center">
-  <img src="media/hold.gif" width="720" alt="Held, the jelly turns through colours, then stretches into a tall sidebar asking 'What can I help with?'">
+  <img src="media/desktop-hold.gif" width="900" alt="On the desktop, the jelly is held: it swells and turns through colours, then stretches up the right side of the screen into a sidebar asking 'What can I help with?', and answers a hello">
 </p>
 
 Esc or × lets it go, and it gathers itself back into a blob as it falls.
