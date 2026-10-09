@@ -15,14 +15,14 @@
 
 Everywhere you are not touching it, your desktop works normally — the window only takes the mouse where the creature actually is.
 
-> The two recordings on a real desktop show it as it is. The close-ups further down are recorded on black with the jelly in red, so the details show up here.
+> The two screen recordings show it live on a Mac. The other demos are recorded from the app itself, on the same desktop, a little closer in.
 
 ---
 
 ## Grab it, fling it, watch it stick
 
 <p align="center">
-  <img src="media/fling.gif" width="720" alt="The jelly is grabbed off the floor, thrown at the left wall where it sticks, then peeled off again">
+  <img src="media/fling.gif" width="800" alt="On the desktop, the black jelly is grabbed off the floor, thrown at the left edge where it sticks, then peeled off again">
 </p>
 
 Every point on the body grabs the edge it touches and holds until the pull beats its stickiness, then lets go one point at a time — so peeling it off a corner feels like peeling, not like a release.
@@ -37,6 +37,10 @@ Press and hold the jelly for a moment. It winds itself up — shaking harder, sw
   <img src="media/desktop-hold.gif" width="900" alt="On the desktop, the jelly is held: it swells and turns through colours, then stretches up the right side of the screen into a sidebar asking 'What can I help with?', and answers a hello">
 </p>
 
+<p align="center">
+  <img src="media/hold.gif" width="800" alt="Closer in: held, the jelly swells and runs through colours, then stretches into a sidebar with the question curved under its face like a smile">
+</p>
+
 Esc or × lets it go, and it gathers itself back into a blob as it falls.
 
 ## Chat with it — it acts out what it says
@@ -46,7 +50,7 @@ Type and press Enter: the message box jiggles, three little drops bounce while i
 When it writes an action — *wiggles*, *bounces*, *blushes*, *spins*, *shivers*, *melts a little* — there are no asterisks on screen. The action becomes a little tag that moves the way it reads, and the jelly's body does the real thing at the same moment.
 
 <p align="center">
-  <img src="media/chat.gif" width="720" alt="A question typed and sent; the reply streams in with a 'wiggles happily' tag while the whole body wiggles">
+  <img src="media/chat.gif" width="800" alt="A question typed and sent; the reply streams in with a 'wiggles happily' tag while the whole body wiggles">
 </p>
 
 ## Talk to it
@@ -56,7 +60,7 @@ Press the microphone on the message box and speak. Your words appear as you say 
 Speech is recognised on your Mac with Apple's speech recognition: nothing is recorded, and it costs nothing. The first time, macOS asks for the microphone and for speech recognition.
 
 <p align="center">
-  <img src="media/voice.gif" width="720" alt="The microphone is pressed; the spoken words appear in the message box, are sent, and the jelly answers with a 'bounces' tag">
+  <img src="media/voice.gif" width="800" alt="The microphone is pressed; the spoken words appear in the message box, are sent, and the jelly answers with a 'bounces' tag">
 </p>
 
 ## Make it yours
@@ -64,7 +68,7 @@ Speech is recognised on your Mac with Apple's speech recognition: nothing is rec
 Two bodies — a pressurised blob and a thick worm that slinks — in any colour. The chat follows the body colour, with light or dark lettering to match.
 
 <p align="center">
-  <img src="media/shapes.gif" width="720" alt="The blob turns red, orange and blue, then becomes a long worm">
+  <img src="media/shapes.gif" width="800" alt="On the desktop, the blob turns red, orange, blue and back to black, then becomes a long worm">
 </p>
 
 ## Settings
@@ -72,7 +76,7 @@ Two bodies — a pressurised blob and a thick worm that slinks — in any colour
 Everything lives in a real Settings window — from the jelly icon in the menu bar, or ⌘,. Physics, stickiness, body, face, moods, throw and sound apply as you drag, and are saved for the next launch (there is a Save Settings button too, for peace of mind).
 
 <p align="center">
-  <img src="media/settings.gif" width="640" alt="The Settings window: a slider dragged, the sections down the side, then the Assistant page with the API key, model and talk-back switch">
+  <img src="media/settings.gif" width="800" alt="The Settings window: a slider dragged, the sections down the side, then the Assistant page with the API key, model and talk-back switch">
 </p>
 
 ### Your API key

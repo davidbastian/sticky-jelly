@@ -1399,8 +1399,10 @@ export default function StickyJellyProject({
       faceTop = false;
       sideTargets = sidebarTargets(side);
       if (hover.current) { wasOver = true; hover.current(true); }
+      /* In page coordinates: the canvas need not start at the page's corner. */
+      const at = canvas.getBoundingClientRect();
       sideState = {
-        x: side.x0 / dpr, y: side.y0 / dpr, w: w / dpr, h: (side.y1 - side.y0) / dpr, below: SIDE_BELOW,
+        x: at.left + side.x0 / dpr, y: at.top + side.y0 / dpr, w: w / dpr, h: (side.y1 - side.y0) / dpr, below: SIDE_BELOW,
         side: right ? 'right' : 'left', color: cfg.blobColor,
       };
       sidebarCb.current?.(sideState);

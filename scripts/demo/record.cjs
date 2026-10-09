@@ -9,8 +9,9 @@
  * shell is replaced by scripts/demo/preload.cjs: scripted replies, a pretend
  * microphone, no API calls.
  *
- * The ground is black and the jelly red, so it shows up on a dark README.
- * Needs ffmpeg on the PATH.
+ * It plays on a real desktop: backdrop.jpg is a frame of one (menu bar, Dock
+ * and all), and the jelly is kept between the two the way the app's window
+ * is kept to the work area. The jelly is its own black. Needs ffmpeg.
  */
 const { app, BrowserWindow, ipcMain, nativeTheme } = require('electron');
 const { spawn } = require('node:child_process');
@@ -21,8 +22,9 @@ const ROOT = path.join(__dirname, '../..');
 const OUT = path.join(ROOT, 'media');
 const TMP = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'jelly-demo-'));
 const FPS = 30;
-const W = 960, H = 600;
-const RED = '#f53d3d';
+const W = 960, H = 624;                    // the backdrop's proportions
+const MENU = 22, DOCK = 36;                // what the work area leaves out, in page px
+const BACKDROP = `url("${path.join(__dirname, 'backdrop.jpg').replace(/"/g, '\\"')}")`;
 
 app.commandLine.appendSwitch('force-device-scale-factor', '1');
 nativeTheme.themeSource = 'dark';
@@ -35,8 +37,7 @@ let jellyWin = null;
 ipcMain.on('demo:rest', (_e, rects) => { lastRest = rects[0]; });
 ipcMain.on('demo:schema', (_e, s) => { schema = s; });
 ipcMain.handle('demo:settings-get', () => ({
-  /* The demo jelly is red; show the swatch that way too. */
-  schema: schema.map(sec => ({ ...sec, controls: sec.controls.map(c => (c.key === 'blobColor' ? { ...c, value: RED } : c)) })),
+  schema,
   icons: true,
   assistant: {
     hasKey: true,
@@ -90,11 +91,13 @@ function record(win, name) {
   };
 }
 
-function gif(src, dest, width = 720) {
+/* A photo behind it: a full palette, and an ordered dither that stays put
+   from frame to frame so only what moves is re-encoded. */
+function gif(src, dest, width = 800) {
   return new Promise((resolve, reject) => {
     const ff = spawn('ffmpeg', [
       '-y', '-loglevel', 'error', '-i', src,
-      '-vf', `fps=25,scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+      '-vf', `fps=20,scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=192:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle`,
       '-loop', '0', dest,
     ], { stdio: 'inherit' });
     ff.on('close', code => (code ? reject(new Error(`ffmpeg ${code}`)) : resolve()));
@@ -114,7 +117,8 @@ async function drag(win, from, to, ms, steps = 24) {
   }
   mouse(win, 'mouseUp', to.x, to.y);
 }
-const center = () => ({ x: lastRest.x + lastRest.w / 2, y: lastRest.y + lastRest.h / 2 });
+/* Rest rects are relative to the jelly's canvas, which starts under the menu bar. */
+const center = () => ({ x: lastRest.x + lastRest.w / 2, y: MENU + lastRest.y + lastRest.h / 2 });
 async function settle(timeout = 6000) {
   lastRest = null;
   const t0 = Date.now();
@@ -135,10 +139,13 @@ async function jellyWindow() {
   const win = offscreen(W, H, path.join(__dirname, 'preload.cjs'), 'index.html');
   jellyWin = win;
   await new Promise(r => win.webContents.once('did-finish-load', r));
-  /* Black ground; a red jelly so it reads on it. */
-  await win.webContents.insertCSS('html, body { background: #000 !important; }');
+  /* The desktop behind it, and the jelly kept to the work area. */
+  await win.webContents.insertCSS(`
+    html, body { background: #000 ${BACKDROP} center / cover no-repeat !important; }
+    #root { position: fixed !important; top: ${MENU}px; left: 0; right: 0; bottom: ${DOCK}px; height: auto !important; }
+    #root > div:first-child { width: 100% !important; height: 100% !important; }
+  `);
   await wait(300);
-  await js(win, `window.demo.set('blobColor', '${RED}')`);
   return win;
 }
 
@@ -163,13 +170,15 @@ async function main() {
   win = await jellyWindow();
   await settle();
   await wait(400);
-  // (Not recorded: the README shows this on a real desktop, media/desktop-hold.gif.)
+  stop = record(win, 'hold');
+  await wait(500);
   c = center();
   mouse(win, 'mouseMove', c.x, c.y);
   mouse(win, 'mouseDown', c.x, c.y);
   await wait(900);
   mouse(win, 'mouseUp', c.x, c.y);
   await wait(2600);
+  await stop();
 
   // 3 — chat: type, send, a reply with an action the body acts out.
   stop = record(win, 'chat');
@@ -192,12 +201,13 @@ async function main() {
   win = await jellyWindow();
   await settle();
   stop = record(win, 'shapes');
-  for (const col of ['#f53d3d', '#f5a83c', '#2a22b8']) {
+  await wait(500);
+  for (const col of ['#f53d3d', '#f5a83c', '#2a22b8', '#0e0e10']) {
     await js(win, `window.demo.set('blobColor', '${col}')`);
     await wait(900);
   }
   await js(win, `window.demo.set('shape', 'Worm')`);
-  for (const col of ['#f5a83c', '#f53d3d']) {
+  for (const col of ['#f53d3d', '#0e0e10']) {
     await wait(1300);
     await js(win, `window.demo.set('blobColor', '${col}')`);
   }
@@ -205,11 +215,25 @@ async function main() {
   await stop();
   win.destroy();
 
-  // 6 — settings: a real window, sections down the side, the assistant's key.
+  // 6 — settings: a real window on the desktop, sections down the side, the
+  // assistant's key. The window is drawn by the page itself here: rounded,
+  // shadowed, with its traffic lights, over the same backdrop.
   jellyWin = null;
-  const sw = offscreen(640, 480, path.join(__dirname, 'settings-preload.cjs'), 'settings.html');
+  const sw = offscreen(W, H, path.join(__dirname, 'settings-preload.cjs'), 'settings.html');
   await new Promise(r => sw.webContents.once('did-finish-load', r));
-  await sw.webContents.insertCSS('body { background: #1c1c1e !important; }');
+  await sw.webContents.insertCSS(`
+    html { background: #000 ${BACKDROP} center / cover no-repeat !important; height: 100%; }
+    body {
+      position: relative; width: 640px !important; height: 440px !important; margin: 96px auto 0 !important;
+      background: #1e1e1e !important; border-radius: 12px; overflow: hidden;
+      box-shadow: 0 0 0 0.5px rgba(255,255,255,0.12), 0 22px 70px rgba(0,0,0,0.55);
+    }
+    nav { background: #2a2a2c; }
+    body::before {
+      content: ''; position: absolute; top: 18px; left: 18px; width: 12px; height: 12px; border-radius: 50%;
+      background: #ff5f57; box-shadow: 20px 0 #febc2e, 40px 0 #28c840; z-index: 5;
+    }
+  `);
   await wait(600);
   stop = record(sw, 'settings');
   const nav = (label) => js(sw, `[...document.querySelectorAll('nav button')].find(b => b.textContent.endsWith(${JSON.stringify(label)}))?.click()`);
