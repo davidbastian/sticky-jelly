@@ -170,13 +170,15 @@ async function main() {
   win = await jellyWindow();
   await settle();
   await wait(400);
-  // Not recorded: the README shows this on a real desktop (media/desktop-hold.gif).
+  stop = record(win, 'hold');
+  await wait(500);
   c = center();
   mouse(win, 'mouseMove', c.x, c.y);
   mouse(win, 'mouseDown', c.x, c.y);
   await wait(900);
   mouse(win, 'mouseUp', c.x, c.y);
   await wait(2600);
+  await stop();
 
   // 3 — chat: type, send, a reply with an action the body acts out.
   stop = record(win, 'chat');

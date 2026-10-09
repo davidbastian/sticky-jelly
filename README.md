@@ -15,7 +15,7 @@
 
 Everywhere you are not touching it, your desktop works normally — the window only takes the mouse where the creature actually is.
 
-> The two screen recordings show it live on a Mac. The other demos are recorded from the app itself, on the same desktop, a little closer in.
+> The recording at the top shows it live on a Mac. The other demos are recorded from the app itself, on the same desktop, a little closer in.
 
 ---
 
@@ -34,7 +34,7 @@ It has moods: every few seconds the face changes — teeth, an arc of extra eyes
 Press and hold the jelly for a moment. It winds itself up — shaking harder, swelling, rolling its eyes and running through colours faster and faster, dizzy — then bursts up the nearer side of the screen into a tall sidebar, still a soft body the whole way. Its face sits in the middle with the question curved under it like a smile, and the message box oozes out of the bottom as a drop of the body itself.
 
 <p align="center">
-  <img src="media/desktop-hold.gif" width="900" alt="On the desktop, the jelly is held: it swells and turns through colours, then stretches up the right side of the screen into a sidebar asking 'What can I help with?', and answers a hello">
+  <img src="media/hold.gif" width="800" alt="On the desktop, the jelly is held: it swells and runs through colours, then stretches into a sidebar with the question curved under its face like a smile">
 </p>
 
 Esc or × lets it go, and it gathers itself back into a blob as it falls.
