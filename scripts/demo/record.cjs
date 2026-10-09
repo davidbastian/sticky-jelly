@@ -259,14 +259,17 @@ async function main() {
     // scene runs on its own.
     if (!schema.length) { const j = await jellyWindow(); await wait(800); j.destroy(); }
     jellyWin = null;
-    const sw = offscreen(640, 440, path.join(__dirname, 'settings-preload.cjs'), 'settings.html', { transparent: true });
+    // The real window's size (desktop/main.cjs), with a clear margin round it
+    // so its corners and edge are never cut.
+    const SW = 640, SH = 560, PAD = 16;
+    const sw = offscreen(SW + PAD * 2, SH + PAD * 2, path.join(__dirname, 'settings-preload.cjs'), 'settings.html', { transparent: true });
     await new Promise(r => sw.webContents.once('did-finish-load', r));
     await sw.webContents.insertCSS(`
       /* An invisible image on the root stops the body's background from
        spreading to the whole page, so the corners stay see-through. */
       html { background: linear-gradient(transparent, transparent) !important; height: 100%; }
       body {
-        position: relative; height: 100%;
+        position: relative; width: ${SW}px !important; height: ${SH}px !important; margin: ${PAD}px !important;
         background: #1e1e1e !important; border-radius: 12px;
         clip-path: inset(0 round 12px);   /* overflow on body clips nothing: it goes to the viewport */
         box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
@@ -278,7 +281,7 @@ async function main() {
       }
     `);
     await wait(600);
-    stop = record(sw, 'settings', { alpha: true, width: 640 });
+    stop = record(sw, 'settings', { alpha: true, width: SW + PAD * 2 });
     const nav = (label) => js(sw, `[...document.querySelectorAll('nav button')].find(b => b.textContent.endsWith(${JSON.stringify(label)}))?.click()`);
     await wait(700);
     // Drag the first slider across and back.

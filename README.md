@@ -74,7 +74,7 @@ Two bodies — a pressurised blob and a thick worm that slinks — in any colour
 Everything lives in a real Settings window — from the jelly icon in the menu bar, or ⌘,. Physics, stickiness, body, face, moods, throw and sound apply as you drag, and are saved for the next launch (there is a Save Settings button too, for peace of mind).
 
 <p align="center">
-  <img src="media/settings.gif" width="800" alt="The Settings window: a slider dragged, the sections down the side, then the Assistant page with the API key, model and talk-back switch">
+  <img src="media/settings.gif" width="672" alt="The Settings window: a slider dragged, the sections down the side, then the Assistant page with the API key, model and talk-back switch">
 </p>
 
 ### Your API key
