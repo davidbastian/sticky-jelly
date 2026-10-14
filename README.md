@@ -57,7 +57,7 @@ Ask, and it does it — each step shows up in the chat as it happens:
 
 - **Apps, folders and files** — "open Figma", "show me my Downloads", "open the last PDF I downloaded".
 - **Websites** — "open YouTube and find lo-fi music", "open Gmail in Chrome", "search Google Maps for coffee nearby". Anything that's a website rather than an app opens in your browser (or the one you name).
-- **Finding things** — "where's the Moët deck?", "screenshots from this week" (Spotlight, newest first).
+- **Finding things** — "where's the keynote deck?", "screenshots from this week" (Spotlight, newest first).
 - **Tidying up** — "sort my Desktop into folders by type", "put the screenshots in a Screenshots folder".
 - **Your calendar and reminders** — "what's on tomorrow?", "add lunch with Ana on Friday at 1", "remind me to call the studio at 5".
 - **Little things** — timers (it bounces when they're up), volume, dark mode, the clipboard.
