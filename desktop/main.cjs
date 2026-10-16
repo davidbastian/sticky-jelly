@@ -172,6 +172,24 @@ function startFocus(minutes, breakMinutes, label) {
   return hhmm(new Date(ends));
 }
 
+/*
+ * Typing for you: the jelly gets out of the way so the app you were in has
+ * the keyboard again, does the typing there, and comes back without taking
+ * it. Resolves to the name of the app it typed into.
+ */
+async function typeElsewhere(fn) {
+  const { execFile } = require('node:child_process');
+  const front = () => new Promise(r => execFile('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'], (e, out) => r(e ? '' : out.trim())));
+  app.hide();   // hands the keyboard back to whatever had it before
+  await new Promise(r => setTimeout(r, 450));
+  const into = await front();
+  try { await fn(); } finally {
+    await new Promise(r => setTimeout(r, 250));
+    win?.showInactive();
+  }
+  return into;
+}
+
 /* Take something (a screenshot) with the jelly out of the picture. */
 async function withoutJelly(fn) {
   const shown = win?.isVisible();
@@ -309,6 +327,7 @@ ipcMain.handle('chat:send', async (e, text) => {
       focus: startFocus,
       away: goAway,
       hidden: withoutJelly,
+      typeAway: typeElsewhere,
       watch: { start: (f) => watcher.start(f), stop: (f) => watcher.stop(f) },
     },
   });

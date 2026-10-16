@@ -99,6 +99,51 @@ async function imageFor(file) {
   return { media_type: 'image/jpeg', data };
 }
 
+/* Typing for someone: never what looks like a card number or a password-ish
+   secret. (Fields are checked too, on web pages.) */
+const looksSensitive = (t) => /\b(?:\d[ -]?){13,19}\b/.test(t);
+
+/*
+ * Web pages: the browsers that take JavaScript from AppleScript, and how to
+ * ask each one. The page script runs in the current tab of the front window.
+ */
+const BROWSERS = ['Safari', 'Google Chrome', 'Arc', 'Brave Browser', 'Microsoft Edge'];
+async function frontBrowser(pref) {
+  if (pref && BROWSERS.includes(pref)) return pref;
+  const running = (await run('osascript', ['-e', 'tell application "System Events" to get name of every application process whose background only is false']).catch(() => '')).split(', ').map(s => s.trim());
+  const front = (await run('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true']).catch(() => '')).trim();
+  if (BROWSERS.includes(front)) return front;
+  return BROWSERS.find(b => running.includes(b)) || 'Safari';
+}
+async function inPage(browser, js) {
+  const script = browser === 'Safari'
+    ? 'tell application "Safari" to do JavaScript (item 1 of argv) in current tab of front window'
+    : `tell application "${browser}" to execute active tab of front window javascript (item 1 of argv)`;
+  try {
+    const out = (await osa(script, js)).trim();
+    return out ? JSON.parse(out) : null;
+  } catch (e) {
+    if (/JavaScript from Apple Events|Allow JavaScript|-1708|not allowed/i.test(e.message)) {
+      throw new Error(browser === 'Safari'
+        ? 'Safari needs one setting: Safari › Settings › Advanced › tick "Show features for web developers", then Develop › "Allow JavaScript from Apple Events".'
+        : `${browser} needs one setting: View › Developer › "Allow JavaScript from Apple Events".`);
+    }
+    if (/-1743|not authori/i.test(e.message)) throw new Error(`macOS needs permission for Sticky Jelly to control ${browser} (System Settings › Privacy & Security › Automation).`);
+    throw new Error(e.message.split('\n')[0]);
+  }
+}
+/* Shared by the page scripts: which fields must never be filled for someone. */
+const PAGE_HELPERS = `
+  const sensitive = (el) => {
+    const a = [el.type, el.autocomplete, el.name, el.id, el.getAttribute('aria-label'), el.placeholder].join(' ').toLowerCase();
+    return el.type === 'password' || /cc-|card|cvv|cvc|csc|iban|ssn|social security|password|passcode|pin\\b|otp|one-time|security code/.test(a);
+  };
+  // A label's own words only — not the text of the field inside it.
+  const ownText = (lab) => [...lab.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ').trim() || lab.innerText;
+  const labelOf = (el) => (el.getAttribute('aria-label') || (el.labels && el.labels[0] && ownText(el.labels[0])) || el.placeholder || (el.tagName === 'SELECT' ? el.name : el.innerText) || el.value || el.name || el.title || el.alt || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+  const byId = (id) => document.querySelector('[data-jelly-id="' + id + '"]');
+`;
+
 function musicApp(pref) {
   if (pref === 'Spotify' || pref === 'Music') return pref;
   return fs.existsSync('/Applications/Spotify.app') ? 'Spotify' : 'Music';
@@ -713,6 +758,151 @@ end tell`, i.query);
         if (t.includes('\u0000')) return { error: "That isn't a text file I can read." };
         return clip(t);
       } catch (e) { return { error: e.message.split('\n')[0] }; }
+    },
+  },
+
+  // ── Typing and web pages ────────────────────────────────────────────────
+  {
+    name: 'type_text',
+    description: 'Type text where the user\'s cursor is, in whatever app they were using (a text field they clicked into: a browser box, a document, a chat). Optionally press Enter after (asks the user first, since that may send or submit). Never for passwords, card numbers or other secrets.',
+    input_schema: {
+      type: 'object',
+      properties: { text: { type: 'string' }, press_enter: { type: 'boolean' } },
+      required: ['text'], additionalProperties: false,
+    },
+    label: (i) => `Typing ${i.text.length > 24 ? `“${i.text.slice(0, 24)}…”` : `“${i.text}”`}`,
+    check: (i) => (typeof i.text === 'string' && i.text.length ? null : 'text is required'),
+    async run(i, { confirm, typeAway }) {
+      if (looksSensitive(i.text)) return { error: "That looks like a card number — I won't type that. The user can type it themselves." };
+      if (!typeAway) return { error: 'Not available.' };
+      if (!systemPreferences.isTrustedAccessibilityClient(true)) {
+        return { error: 'To type for you, Sticky Jelly needs Accessibility: System Settings › Privacy & Security › Accessibility, switch on Sticky Jelly, then ask again.' };
+      }
+      if (i.press_enter) {
+        const ok = await confirm({ title: 'Type it and press Enter', lines: [{ from: i.text.slice(0, 80), to: 'then Enter — this may send or submit' }], action: 'Type it' });
+        if (!ok) return { declined: true, note: 'The user chose not to.' };
+      }
+      // Pasted rather than keyed, so any character comes out right; the
+      // clipboard is put back afterwards.
+      const into = await typeAway(async () => {
+        const before = clipboard.readText();
+        clipboard.writeText(i.text);
+        await osa('tell application "System Events" to keystroke "v" using command down');
+        await new Promise(r => setTimeout(r, 180));
+        if (i.press_enter) await osa('tell application "System Events" to key code 36');
+        setTimeout(() => clipboard.writeText(before), 600);
+      });
+      return { typed: i.text.length, into, entered: !!i.press_enter };
+    },
+  },
+  {
+    name: 'browser_read_page',
+    description: 'Read the page open in the front browser window (Safari, Chrome, Arc, Brave or Edge): its URL and title, the fields, buttons and links on it (each with an id to use with browser_fill and browser_click), and its text.',
+    input_schema: {
+      type: 'object',
+      properties: { browser: { type: 'string', enum: BROWSERS } },
+      additionalProperties: false,
+    },
+    label: () => 'Reading the page',
+    check: () => null,
+    async run(i) {
+      const browser = await frontBrowser(i.browser);
+      try {
+        const page = await inPage(browser, `(() => { ${PAGE_HELPERS}
+          window.__jellyN = window.__jellyN || 0;
+          const shown = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+          const items = [];
+          for (const el of document.querySelectorAll('input:not([type=hidden]), textarea, select, button, a[href], [role=button], [contenteditable=true]')) {
+            if (items.length >= 150 || !shown(el)) continue;
+            if (!el.dataset.jellyId) el.dataset.jellyId = String(++window.__jellyN);
+            const tag = el.tagName.toLowerCase();
+            const kind = tag === 'a' ? 'link' : tag === 'button' || el.getAttribute('role') === 'button' || ['submit', 'button'].includes(el.type) ? 'button' : 'field';
+            const it = { id: +el.dataset.jellyId, kind, label: labelOf(el) };
+            if (kind === 'field') { it.type = tag === 'input' ? el.type : tag; if (sensitive(el)) it.sensitive = true; else if (el.value) it.value = String(el.value).slice(0, 60); }
+            if (kind === 'link') it.href = el.getAttribute('href').slice(0, 80);
+            items.push(it);
+          }
+          return JSON.stringify({ url: location.href, title: document.title, items, text: document.body.innerText.replace(/\\n{3,}/g, '\\n\\n').slice(0, 5000) });
+        })()`);
+        return { browser, ...page };
+      } catch (e) { return { error: e.message }; }
+    },
+  },
+  {
+    name: 'browser_fill',
+    description: 'Fill fields on the front browser page, by the ids from browser_read_page. Text fields, text areas, selects (by option text) and editable areas. Password, card and other sensitive fields are refused — the user fills those.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fields: { type: 'array', items: { type: 'object', properties: { id: { type: 'integer' }, value: { type: 'string' } }, required: ['id', 'value'], additionalProperties: false } },
+        browser: { type: 'string', enum: BROWSERS },
+      },
+      required: ['fields'], additionalProperties: false,
+    },
+    label: (i) => `Filling ${i.fields?.length || ''} field${i.fields?.length === 1 ? '' : 's'}`,
+    check: (i) => (Array.isArray(i.fields) && i.fields.length ? null : 'fields are required'),
+    async run(i) {
+      if (i.fields.some(f => looksSensitive(f.value))) return { error: "One of those looks like a card number — I won't fill that." };
+      const browser = await frontBrowser(i.browser);
+      try {
+        const result = await inPage(browser, `(() => { ${PAGE_HELPERS}
+          const fields = ${JSON.stringify(i.fields)};
+          const done = [], refused = [], missing = [];
+          for (const f of fields) {
+            const el = byId(f.id);
+            if (!el) { missing.push(f.id); continue; }
+            if (sensitive(el)) { refused.push(labelOf(el) || f.id); continue; }
+            el.focus();
+            if (el.tagName === 'SELECT') {
+              const opt = [...el.options].find(o => o.text.trim().toLowerCase() === f.value.toLowerCase() || o.value === f.value) || [...el.options].find(o => o.text.toLowerCase().includes(f.value.toLowerCase()));
+              if (opt) el.value = opt.value; else { missing.push(f.id); continue; }
+            } else if (el.isContentEditable) {
+              document.execCommand('selectAll', false); document.execCommand('insertText', false, f.value);
+            } else {
+              // The native setter, so frameworks (React and co.) notice.
+              const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, f.value);
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            done.push(labelOf(el) || f.id);
+          }
+          return JSON.stringify({ filled: done, refused, missing });
+        })()`);
+        return { browser, ...result, ...(result.refused?.length ? { note: 'Sensitive fields were left for the user.' } : {}) };
+      } catch (e) { return { error: e.message }; }
+    },
+  },
+  {
+    name: 'browser_click',
+    description: 'Click a button or link on the front browser page, by its id from browser_read_page. Anything that buys, pays, orders, sends, posts, submits, deletes or signs up is shown to the user to approve first. Never use it to log in.',
+    input_schema: {
+      type: 'object',
+      properties: { id: { type: 'integer' }, browser: { type: 'string', enum: BROWSERS } },
+      required: ['id'], additionalProperties: false,
+    },
+    label: () => 'Clicking',
+    check: (i) => (Number.isInteger(i.id) ? null : 'id is required'),
+    async run(i, { confirm }) {
+      const browser = await frontBrowser(i.browser);
+      try {
+        const info = await inPage(browser, `(() => { ${PAGE_HELPERS}
+          const el = byId(${i.id});
+          if (!el) return JSON.stringify(null);
+          return JSON.stringify({ label: labelOf(el), submit: el.type === 'submit' || (el.tagName === 'BUTTON' && !!el.form && el.type !== 'button'), host: location.hostname });
+        })()`);
+        if (!info) return { error: 'That element is gone — read the page again.' };
+        const risky = info.submit || /buy|pay|order|purchase|checkout|check out|send|post|publish|submit|delete|remove|confirm|subscribe|sign ?up|book|reserve|donate|transfer|place/i.test(info.label);
+        if (/log ?in|sign ?in/i.test(info.label)) return { error: "I don't log in for people — the user can press that one." };
+        if (risky) {
+          const ok = await confirm({ title: `Press “${info.label || 'this button'}”?`, lines: [{ from: info.label || 'Button', to: info.host }], action: 'Press it' });
+          if (!ok) return { declined: true, note: 'The user chose not to press it.' };
+        }
+        await inPage(browser, `(() => { ${PAGE_HELPERS} const el = byId(${i.id}); if (el) { el.scrollIntoView({ block: 'center' }); el.click(); } return JSON.stringify(!!el); })()`);
+        await new Promise(r => setTimeout(r, 1200));
+        const after = await inPage(browser, 'JSON.stringify({ url: location.href, title: document.title })').catch(() => null);
+        return { clicked: info.label, now: after };
+      } catch (e) { return { error: e.message }; }
     },
   },
 

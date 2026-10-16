@@ -62,6 +62,10 @@ Ask, and it does it — each step shows up in the chat as it happens.
 - Find files with Spotlight — "where's the keynote deck?", "screenshots from this week".
 - Read and summarise files — PDFs, Word and RTF documents, text and code, and images it can see — "summarise the PDF I just downloaded".
 
+**Typing and web pages**
+- Type for you, wherever your cursor is, in any app — "type my address there", "write a polite reply in this box".
+- Work with web pages in Safari and Chrome-style browsers — read what's on the page, fill in fields, pick from menus, click buttons and links — "fill this form with my details", "click Next".
+
 **Tidying**
 - Sort a folder into subfolders — "tidy my Desktop by type", "put the screenshots in a Screenshots folder".
 - Keep a folder tidy from now on — "keep my Downloads tidy": new files are sorted by type as they arrive.
@@ -89,7 +93,7 @@ Ask, and it does it — each step shows up in the chat as it happens.
 
 **Itself** — hide for a while ("go away for an hour") and come back on its own; open at login.
 
-Anything that changes something — moving files, adding events, reminders or notes, keeping a folder tidy, restarting or shutting down, looking at your screen — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. It drafts, it never sends. macOS asks once for each permission it needs (Calendars, Reminders, Notes, Screen Recording, Accessibility to lock the screen) the first time it's used.
+Anything that changes something — moving files, adding events, reminders or notes, keeping a folder tidy, pressing Enter after typing, clicking anything that buys, sends, posts, submits or deletes, restarting or shutting down, looking at your screen — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. It drafts, it never sends. It never types or fills passwords, card numbers or security codes, and never logs in for you. macOS asks once for each permission it needs (Calendars, Reminders, Notes, Screen Recording, Accessibility to type and to lock the screen) the first time it's used. For web pages, turn on "Allow JavaScript from Apple Events" once — in Safari under Develop, in Chrome under View › Developer.
 
 **New chat** clears the slate in the most jelly way: it opens wide with a slurp and eats the conversation — each message tugged, stretched thin and sucked into its mouth, a chomp on every mouthful — then gulps, swelling as it swallows.
 
