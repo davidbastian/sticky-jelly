@@ -48,7 +48,7 @@ You have a body, and you can use it. When it suits the moment, include one short
 
 Sometimes the user talks to you out loud and hears your reply spoken. Write so it sounds natural read aloud.
 
-You can do things on the user's Mac with your tools: open apps, websites, folders and files; find files; look in and tidy folders; read their calendar and reminders and add to them; set timers; change the volume or dark mode; use the clipboard; and search the web. Use them whenever they help — don't describe how the user could do it themselves when you can just do it. For anything that is a website rather than an installed app (YouTube, Gmail, Google, a search on some site), use open_url with the full URL — if open_app can't find an app, the website is usually what they want. Paths are inside the user's home folder (~). Look before you change things: list a folder before organising it, and put every move for a task into one organize_files call. Anything that changes something is shown to the user to approve, so don't ask for permission in words first; if they decline, accept it and move on. Never trash anything unless they asked. Each message starts with the user's current local date and time; use it for "today", "tomorrow" and so on. After using tools, say briefly what you did.`;
+You can do things on the user's Mac with your tools: open apps, websites, folders and files; find, read and summarise files (PDFs, documents, images); look in and tidy folders, and keep a folder tidy automatically; read their calendar and reminders and add to them; save notes; draft emails and messages (never send them); control Spotify or Apple Music; look at their screen when asked; check battery, Wi-Fi and disk; turn Wi-Fi on or off; change the volume or dark mode; put the Mac to sleep, lock it, turn the display off, restart or shut it down; set timers and focus sessions; hide yourself for a while; use the clipboard; and search the web. For a briefing ("brief me", "what's my day"), combine today's calendar, reminders that are due, and the weather. Use them whenever they help — don't describe how the user could do it themselves when you can just do it. For anything that is a website rather than an installed app (YouTube, Gmail, Google, a search on some site), use open_url with the full URL — if open_app can't find an app, the website is usually what they want. Paths are inside the user's home folder (~). Look before you change things: list a folder before organising it, and put every move for a task into one organize_files call. Anything that changes something is shown to the user to approve, so don't ask for permission in words first; if they decline, accept it and move on. Never trash anything unless they asked. Each message starts with the user's current local date and time; use it for "today", "tomorrow" and so on. After using tools, say briefly what you did.`;
 
 /* OpenAI has no web search of its own here. */
 const SYSTEM_COMPAT = SYSTEM.replace(
@@ -119,7 +119,7 @@ function createAssistant({ keyPaths }) {
    * stream text, run any tool calls, send the results back, until the model
    * answers in words.
    */
-  async function sendOpenAI(text, model, { onDelta, onTool, confirm, onTimer }) {
+  async function sendOpenAI(text, model, { onDelta, onTool, confirm, onTimer, extra }) {
     const base = history.length;
     history.push({ role: 'user', content: `${now()}\n\n${text}` });
     const key = readKey('openai');
@@ -129,7 +129,7 @@ function createAssistant({ keyPaths }) {
     }
     const url = `${OPENAI}/chat/completions`;
     const fnTools = tools.definitions().map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
-    const ctx = { confirm, onTimer };
+    const ctx = { confirm, onTimer, ...extra };
     let pending = null;
     try {
       for (let round = 0; round < 10; round++) {
@@ -191,6 +191,7 @@ function createAssistant({ keyPaths }) {
 
         pending = toolCalls;
         const results = [];
+        const pictures = [];   // OpenAI takes images only in user messages
         for (const tc of toolCalls) {
           let input = null;
           try { input = JSON.parse(tc.function.arguments || '{}'); } catch { /* reported below */ }
@@ -199,10 +200,15 @@ function createAssistant({ keyPaths }) {
           onTool({ id: tc.id, label, state: 'running' });
           const result = input === null ? { error: 'The arguments were not valid JSON.' } : await tools.execute(block, ctx);
           onTool({ id: tc.id, label, state: result.declined ? 'declined' : result.error ? 'error' : 'done' });
-          results.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(result) });
+          const { image, ...rest } = result;
+          if (image) pictures.push(image);
+          results.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(image ? { ...rest, image: 'attached in the next message' } : result) });
         }
         pending = null;
         history.push(...results);
+        if (pictures.length) {
+          history.push({ role: 'user', content: pictures.map(im => ({ type: 'image_url', image_url: { url: `data:${im.media_type};base64,${im.data}` } })) });
+        }
         if (halted) return { stopped: true };
       }
       return { ok: true };
@@ -280,11 +286,11 @@ function createAssistant({ keyPaths }) {
       halted = false;
       if (provider !== historyProvider) { history = []; historyProvider = provider; }
       if (provider === 'openai') return sendOpenAI(text, model, callbacks);
-      const { onDelta, onTool, confirm, onTimer } = callbacks;
+      const { onDelta, onTool, confirm, onTimer, extra } = callbacks;
       const base = history.length;
       history.push({ role: 'user', content: [{ type: 'text', text: now() }, { type: 'text', text }] });
       const chosen = MODELS[model] ? model : DEFAULT_MODEL;
-      const ctx = { confirm, onTimer };
+      const ctx = { confirm, onTimer, ...extra };
       let stream;
       let pendingTools = null;   // tool_use blocks sent but not yet answered
       try {
@@ -346,7 +352,12 @@ function createAssistant({ keyPaths }) {
             const result = await tools.execute(u, ctx);
             const failed = !!result.error;
             onTool({ id: u.id, label, state: result.declined ? 'declined' : failed ? 'error' : 'done' });
-            results.push({ type: 'tool_result', tool_use_id: u.id, content: JSON.stringify(result), ...(failed ? { is_error: true } : {}) });
+            // A picture (the screen, an image file) goes back as an image.
+            const { image, ...rest } = result;
+            const content = image
+              ? [{ type: 'image', source: { type: 'base64', media_type: image.media_type, data: image.data } }, { type: 'text', text: JSON.stringify(rest) }]
+              : JSON.stringify(result);
+            results.push({ type: 'tool_result', tool_use_id: u.id, content, ...(failed ? { is_error: true } : {}) });
           }
           pendingTools = null;
           // Every result in one message.

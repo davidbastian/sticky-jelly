@@ -87,6 +87,9 @@ export interface SidebarControl {
   mouth: () => { x: number; y: number };
   /* A swallow: the body swells for a moment. */
   gulp: () => void;
+  /* A focus session from start to end (ms), or null when it is over: the
+     jelly gets sleepier as the end nears. */
+  setFocus: (start: number | null, end?: number) => void;
 }
 
 export type ChatSound = 'send' | 'think' | 'word' | 'done' | 'new' | 'close' | 'munch' | 'gulp' | 'slurp' | JellyAction;
@@ -246,6 +249,7 @@ export default function StickyJellyProject({
       twinsChance:     0.35, // worm only — eyes at both ends
       extraEyes:       6,
       teeth:           5,
+      timeMoods:       true,   // sleepier at night, bouncier on Friday afternoons
       // Look
       palette: 'Red',
       bgColor: PALETTES.Red,
@@ -332,6 +336,7 @@ export default function StickyJellyProject({
     fMood.add(cfg, 'twinsChance',     0, 1, 0.05).name('Twins (Worm)');
     fMood.add(cfg, 'extraEyes',       3, MAX_EYES, 1).name('Extra Eyes');
     fMood.add(cfg, 'teeth',           3, MAX_TEETH, 1).name('Teeth');
+    fMood.add(cfg, 'timeMoods').name('Time of Day');
 
     const fLook = gui.addFolder('Look');
     const bgCtrl = fLook.addColor(cfg, 'bgColor').name('Background');
@@ -497,6 +502,8 @@ export default function StickyJellyProject({
     // hundredths of a second, sprung so it reads as chatter, not flicker.
     let talking = false, talkOpen = 0, talkGoal = 0, talkNext = 0;
     let gape: number | null = null;   // held open (eating), overriding the chatter
+    let focus: { start: number; end: number } | null = null;
+    let fridayHop = 20;               // seconds to the next unprompted Friday hop
     let gulpLeft = 0;                 // seconds left of a swallow's swell
     let mouthAt = { x: 0, y: 0 };     // last drawn mouth centre, device px
     // An action in progress: what, and how much of it is left (seconds).
@@ -1263,13 +1270,23 @@ export default function StickyJellyProject({
     // Googly pupils: a loose spring, shared offset state for every eye
     let pupX = 0, pupY = 0, pupVx = 0, pupVy = 0;
 
+    /* The hour shapes its mood: late at night it is mostly sleepy; on a
+       Friday afternoon it is wide awake and up for anything. */
+    const timeOfDay = () => {
+      if (!cfg.timeMoods) return 'normal';
+      const d = new Date(), h = d.getHours();
+      if (h >= 23 || h < 6) return 'night';
+      if (d.getDay() === 5 && h >= 15 && h < 21) return 'friday';
+      return 'normal';
+    };
     const pickMood = (): Mood => {
+      const tod = timeOfDay();
       const entries: [Mood, number][] = [
         ['toothy',    cfg.mouthChance],
-        ['manyEyes',  cfg.manyEyesChance],
+        ['manyEyes',  cfg.manyEyesChance * (tod === 'friday' ? 2 : 1)],
         ['cyclops',   cfg.cyclopsChance],
-        ['sleepy',    cfg.sleepyChance],
-        ['surprised', cfg.surprisedChance],
+        ['sleepy',    tod === 'night' ? Math.max(0.6, cfg.sleepyChance * 4) : tod === 'friday' ? 0 : cfg.sleepyChance],
+        ['surprised', cfg.surprisedChance * (tod === 'friday' ? 2.5 : 1)],
       ];
       if (isWorm()) entries.push(['twins', cfg.twinsChance]);
       // Classic always keeps a slice of the pie so the plain face comes back
@@ -1284,9 +1301,13 @@ export default function StickyJellyProject({
 
     const updateFace = (dt: number) => {
       // Mood changes hide behind a blink so the face never pops mid-stare
+      // Late in a focus session it can hardly keep its eyes open.
+      const drowsy = focus && !side && (focus.end - Date.now()) / (focus.end - focus.start) < 0.3;
       // In the sidebar it keeps a plain face: it is listening.
       if (side) {
         if (mood !== 'classic' && blinkPhase === 0) { pendingMood = 'classic'; blinkPhase = 1; }
+      } else if (drowsy) {
+        if (mood !== 'sleepy' && blinkPhase === 0) { pendingMood = 'sleepy'; blinkPhase = 1; }
       } else if ((moodTimer -= dt) <= 0 && blinkPhase === 0) {
         moodTimer = cfg.moodEvery * (0.6 + Math.random() * 0.8);
         const next = pickMood();
@@ -1584,6 +1605,12 @@ export default function StickyJellyProject({
       }
       if (actKind && (actLeft -= dt) <= 0) { actKind = ''; actLeft = 0; }
       if (gulpLeft > 0) gulpLeft = Math.max(0, gulpLeft - dt);
+      // Friday afternoon: now and then it hops for no reason at all.
+      if (!side && !holdAt && dragIdx < 0 && timeOfDay() === 'friday' && (fridayHop -= dt) <= 0) {
+        fridayHop = 18 + Math.random() * 30;
+        actKind = 'bounce'; actLeft = ACT_LEN.bounce;
+        for (const p of pts) { if (!p.stuck) p.py = p.y + 12 * dpr; }
+      }
       // Builds while held; let go (or burst) and it settles back over ~¼s.
       charge = holdAt ? Math.min(1, (now - holdAt) / HOLD_MS) : Math.max(0, charge - dt * 4);
       humUpdate(charge, !!holdAt);
@@ -1711,6 +1738,7 @@ export default function StickyJellyProject({
         return { x: at.left + mouthAt.x / dpr, y: at.top + mouthAt.y / dpr };
       },
       gulp: () => { gulpLeft = 0.45; },
+      setFocus: (start, end) => { focus = start && end ? { start, end } : null; },
       sound: chatSound,
       act: (kind) => {
         actKind = kind;

@@ -28,7 +28,7 @@ declare global {
       rest: (rects: Rect[]) => void;
       settings: (schema: SettingsBridge['schema'], set: SettingsBridge['set']) => () => void;
       focus: () => void;
-      onPing?: (fn: (p: { kind: string; label?: string }) => void) => () => void;
+      onPing?: (fn: (p: { kind: string; label?: string; start?: number; ends?: number }) => void) => () => void;
       chat: Parameters<typeof Chat>[0]['api'];
       voice?: VoiceApi;
     };
@@ -41,9 +41,10 @@ function Desktop() {
 
   /* A timer it set went off: it bounces, wherever it is. */
   useEffect(() => {
-    return window.jelly?.onPing?.(() => {
-      control.current?.act('bounce');
-      control.current?.sound('bounce');
+    return window.jelly?.onPing?.((p) => {
+      if (p.kind === 'focus') control.current?.setFocus(p.start ?? null, p.ends);
+      else if (p.kind === 'focus-off') control.current?.setFocus(null);
+      else { control.current?.act('bounce'); control.current?.sound('bounce'); }
     });
   }, []);
 

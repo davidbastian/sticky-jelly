@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('settings', {
   get: () => ipcRenderer.invoke('settings:get'),
   set: (key, value) => ipcRenderer.send('settings:set', key, value),
   icons: (on) => ipcRenderer.send('settings:icons', !!on),
+  login: (on) => ipcRenderer.send('settings:login', !!on),
   reset: () => ipcRenderer.invoke('settings:reset'),
   save: () => ipcRenderer.invoke('settings:save'),
   saveKey: (key, provider) => ipcRenderer.invoke('settings:key', key, provider),

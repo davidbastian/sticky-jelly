@@ -12,12 +12,13 @@
  * Only the body is clickable, so the jelly can sit over your files and you can
  * still use them.
  */
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, Notification } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const { createIconMover } = require('./icons.cjs');
 const { createAssistant } = require('./assistant.cjs');
+const { createWatcher } = require('./watcher.cjs');
 
 const DEV_URL = process.env.JELLY_DEV_URL || 'http://localhost:5173';
 const isDev = !app.isPackaged;
@@ -27,6 +28,7 @@ let tray = null;
 let icons = null;
 let settingsWin = null;
 let assistant = null;
+let watcher = null;
 /* Kept so the tray can report and toggle it. */
 let clickThrough = true;
 
@@ -98,19 +100,83 @@ function createTray() {
   if (!icon.isEmpty()) icon.setTemplateImage(true);
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
   tray.setToolTip('Sticky Jelly');
-  const menu = Menu.buildFromTemplate([
+  refreshTray();
+}
+
+/* The menu changes with what the jelly is up to: away, focusing, tidying. */
+function refreshTray() {
+  if (!tray) return;
+  const extra = [];
+  if (awayTimer) extra.push({ label: 'Come Back Now', click: () => comeBack() });
+  if (focusTimers.length) extra.push({ label: 'Stop Focus Session', click: () => stopFocus() });
+  for (const f of watcher?.folders() || []) {
+    extra.push({ label: `Stop Tidying ${path.basename(f)}`, click: () => watcher.stop(f) });
+  }
+  tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Sticky Jelly', enabled: false },
     { type: 'separator' },
     {
-      label: 'Hide',
-      click: () => { if (win) (win.isVisible() ? win.hide() : win.show()); },
+      label: win?.isVisible() === false ? 'Show' : 'Hide',
+      click: () => { if (win) (win.isVisible() ? win.hide() : win.show()); refreshTray(); },
     },
     { label: 'Settings…', accelerator: 'CommandOrControl+,', click: openSettings },
     { label: 'About Sticky Jelly', click: showAbout },
+    ...(extra.length ? [{ type: 'separator' }, ...extra] : []),
     { type: 'separator' },
     { label: 'Quit', role: 'quit' },
-  ]);
-  tray.setContextMenu(menu);
+  ]));
+}
+
+const notify = (body) => { try { new Notification({ title: 'Sticky Jelly', body }).show(); } catch { /* fine */ } };
+const hhmm = (d) => d.toTimeString().slice(0, 5);
+
+/* Away: hidden for a while (do not disturb), back on its own. */
+let awayTimer = null;
+function goAway(minutes) {
+  clearTimeout(awayTimer);
+  setTimeout(() => win?.hide(), 1500);   // after the reply has been seen
+  const back = new Date(Date.now() + minutes * 60000);
+  awayTimer = setTimeout(comeBack, minutes * 60000);
+  refreshTray();
+  return hhmm(back);
+}
+function comeBack() {
+  clearTimeout(awayTimer);
+  awayTimer = null;
+  win?.showInactive();
+  refreshTray();
+}
+
+/* Focus: a work stretch with the jelly getting sleepier, then a break. */
+let focusTimers = [];
+function stopFocus() {
+  focusTimers.forEach(clearTimeout);
+  focusTimers = [];
+  win?.webContents.send('jelly:ping', { kind: 'focus-off' });
+  refreshTray();
+}
+function startFocus(minutes, breakMinutes, label) {
+  stopFocus();
+  const now = Date.now(), ends = now + minutes * 60000;
+  win?.webContents.send('jelly:ping', { kind: 'focus', start: now, ends });
+  focusTimers.push(setTimeout(() => {
+    notify(breakMinutes ? `Focus done${label ? `: ${label}` : ''}. Take ${breakMinutes} minutes.` : `Focus done${label ? `: ${label}` : ''}.`);
+    win?.webContents.send('jelly:ping', { kind: 'focus-off' });
+    win?.webContents.send('jelly:ping', { kind: 'bounce' });
+    if (breakMinutes) {
+      focusTimers.push(setTimeout(() => { notify('Break over.'); win?.webContents.send('jelly:ping', { kind: 'bounce' }); focusTimers = []; refreshTray(); }, breakMinutes * 60000));
+    } else { focusTimers = []; }
+    refreshTray();
+  }, minutes * 60000));
+  refreshTray();
+  return hhmm(new Date(ends));
+}
+
+/* Take something (a screenshot) with the jelly out of the picture. */
+async function withoutJelly(fn) {
+  const shown = win?.isVisible();
+  if (shown) { win.hide(); await new Promise(r => setTimeout(r, 300)); }
+  try { return await fn(); } finally { if (shown) win.showInactive(); }
 }
 
 /*
@@ -156,6 +222,7 @@ ipcMain.on('jelly:schema', (_e, s) => {
 ipcMain.handle('settings:get', () => ({
   schema,
   icons: icons.enabled,
+  login: app.getLoginItemSettings().openAtLogin,
   assistant: {
     provider: providerNow(),
     providers: assistant.providers,
@@ -185,6 +252,8 @@ ipcMain.handle('settings:key', (_e, key, provider = 'anthropic') => {
   return true;
 });
 ipcMain.handle('settings:key-remove', (_e, provider = 'anthropic') => { assistant.removeKey(provider); });
+/* Open at login: macOS keeps this one itself. */
+ipcMain.on('settings:login', (_e, on) => app.setLoginItemSettings({ openAtLogin: !!on }));
 ipcMain.on('settings:speak', (_e, on) => {
   saved.__speak = !!on;
   saveSettings();
@@ -236,6 +305,12 @@ ipcMain.handle('chat:send', async (e, text) => {
     }),
     /* A timer went off: the jelly bounces, even with the chat closed. */
     onTimer: (label) => win?.webContents.send('jelly:ping', { kind: 'bounce', label }),
+    extra: {
+      focus: startFocus,
+      away: goAway,
+      hidden: withoutJelly,
+      watch: { start: (f) => watcher.start(f), stop: (f) => watcher.stop(f) },
+    },
   });
 });
 ipcMain.on('chat:stop', () => { settleApprovals(); assistant.stop(); });
@@ -393,6 +468,11 @@ app.whenReady().then(() => {
     getArea: () => screen.getPrimaryDisplay().workArea,
   });
   if (saved.__moveIcons === false) icons.setEnabled(false);
+  watcher = createWatcher({
+    load: () => saved.__watch || [],
+    save: (list) => { saved.__watch = list; saveSettings(); refreshTray(); },
+    notify,
+  });
   /* Anything a previous run left displaced — a crash, a force quit. */
   icons.restore();
   createAppMenu();

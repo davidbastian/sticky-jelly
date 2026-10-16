@@ -21,9 +21,10 @@ interface Assistant {
 declare global {
   interface Window {
     settings: {
-      get: () => Promise<{ schema: Section[]; icons: boolean; assistant: Assistant }>;
+      get: () => Promise<{ schema: Section[]; icons: boolean; login: boolean; assistant: Assistant }>;
       set: (key: string, value: unknown) => void;
       icons: (on: boolean) => void;
+      login: (on: boolean) => void;
       reset: () => Promise<void>;
       save: () => Promise<boolean>;
       onSchema: (fn: () => void) => void;
@@ -44,6 +45,7 @@ const title = document.getElementById('title')!;
 
 let sections: Section[] = [];
 let icons = true;
+let login = false;
 let assistant: Assistant = {
   provider: 'anthropic',
   providers: { anthropic: 'Claude (Anthropic)', openai: 'OpenAI' },
@@ -132,6 +134,10 @@ function controlRow(c: Control) {
 function desktopSection() {
   const g = document.createElement('div');
   g.className = 'group';
+  g.append(row('Open at login', toggle(login, 'Open at login', (on) => {
+    login = on;
+    window.settings.login(on);
+  })));
   g.append(row('Move desktop icons aside', toggle(icons, 'Move desktop icons aside', (on) => {
     icons = on;
     window.settings.icons(on);
@@ -283,6 +289,7 @@ async function load() {
   const s = await window.settings.get();
   sections = s.schema;
   icons = s.icons;
+  login = s.login;
   assistant = s.assistant;
   current = Math.min(current, sections.length + 1);
   render();

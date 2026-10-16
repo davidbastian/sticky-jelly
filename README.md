@@ -53,17 +53,43 @@ When it writes an action — *wiggles*, *bounces*, *blushes*, *spins*, *shivers*
 
 ## It can do things on your Mac
 
-Ask, and it does it — each step shows up in the chat as it happens:
+Ask, and it does it — each step shows up in the chat as it happens.
 
-- **Apps, folders and files** — "open Figma", "show me my Downloads", "open the last PDF I downloaded".
-- **Websites** — "open YouTube and find lo-fi music", "open Gmail in Chrome", "search Google Maps for coffee nearby". Anything that's a website rather than an app opens in your browser (or the one you name).
-- **Finding things** — "where's the keynote deck?", "screenshots from this week" (Spotlight, newest first).
-- **Tidying up** — "sort my Desktop into folders by type", "put the screenshots in a Screenshots folder".
-- **Your calendar and reminders** — "what's on tomorrow?", "add lunch with Ana on Friday at 1", "remind me to call the studio at 5".
-- **Little things** — timers (it bounces when they're up), volume, dark mode, the clipboard.
-- **The web** — "what's the weather in Barcelona?"
+**Apps, websites and files**
+- Open any app — "open Figma", "launch Spotify".
+- Open websites, in your default browser or the one you name — "open YouTube and find lo-fi music", "open Gmail in Chrome", "search Maps for coffee nearby".
+- Open folders and files, or show them in Finder — "show me my Downloads", "open the last PDF I downloaded".
+- Find files with Spotlight — "where's the keynote deck?", "screenshots from this week".
+- Read and summarise files — PDFs, Word and RTF documents, text and code, and images it can see — "summarise the PDF I just downloaded".
 
-Anything that changes something — moving files, adding an event or a reminder — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. macOS asks once for Calendars and Reminders the first time they're used.
+**Tidying**
+- Sort a folder into subfolders — "tidy my Desktop by type", "put the screenshots in a Screenshots folder".
+- Keep a folder tidy from now on — "keep my Downloads tidy": new files are sorted by type as they arrive.
+
+**Your day**
+- Read your calendar and add events — "what's on tomorrow?", "add lunch with Ana on Friday at 1".
+- Read and add reminders — "remind me to call the studio at 5".
+- Save notes to Apple Notes — "note this down: …".
+- A morning briefing — "brief me": today's events, what's due and the weather.
+- Timers (it bounces when they're up) and focus sessions — "focus for 25 minutes": it gets sleepier as time runs out, then bounces for your break.
+
+**Writing**
+- Draft emails, opened in your mail app ready to send — it never sends them itself.
+- Prepare messages — the text goes on your clipboard and Messages opens to the person.
+- Clipboard help — "translate what I copied", "make this friendlier and copy it".
+
+**Your Mac**
+- Music — play, pause, skip, "what's playing?", "play something by Bonobo" (Spotify or Apple Music).
+- Status — battery, Wi-Fi, free disk space; turn Wi-Fi on or off.
+- Volume, mute and dark mode.
+- Sleep, lock the screen, turn the display off; restart or shut down.
+- Look at your screen and help with what's on it — "what am I looking at?" (asks first, every time).
+
+**The web** — search for anything current — "what's the weather in Barcelona?" (with Claude).
+
+**Itself** — hide for a while ("go away for an hour") and come back on its own; open at login.
+
+Anything that changes something — moving files, adding events, reminders or notes, keeping a folder tidy, restarting or shutting down, looking at your screen — first shows you the plan with **Do it** and **Not now**, and nothing happens unless you say so. Files stay inside your home folder (never ~/Library), are never overwritten (a clash gets " 2"), and only ever go to the Trash, never deleted. It drafts, it never sends. macOS asks once for each permission it needs (Calendars, Reminders, Notes, Screen Recording, Accessibility to lock the screen) the first time it's used.
 
 **New chat** clears the slate in the most jelly way: it opens wide with a slurp and eats the conversation — each message tugged, stretched thin and sucked into its mouth, a chomp on every mouthful — then gulps, swelling as it swallows.
 

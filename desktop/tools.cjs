@@ -16,7 +16,7 @@ const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { shell, clipboard, Notification } = require('electron');
+const { shell, clipboard, Notification, systemPreferences } = require('electron');
 
 const HOME = os.homedir();
 
@@ -72,6 +72,37 @@ async function calendar(...args) {
 }
 
 const str = (v) => typeof v === 'string' && v.trim().length > 0;
+
+/* AppleScript with its inputs passed as arguments, never pasted into the
+   script — so a title with a quote in it can't break out. */
+const osa = (script, ...args) => run('osascript', ['-e', `on run argv\n${script}\nend run`, ...args.map(String)]);
+const jxa = (script, ...args) => run('osascript', ['-l', 'JavaScript', '-e', `function run(argv) {\n${script}\n}`, ...args.map(String)]);
+
+const mins = (m) => (m < 1 ? `${Math.round(m * 60)} s` : `${+m.toFixed(1)} min`);
+
+/* The Wi-Fi interface (usually en0), found once. */
+let wifiPort = null;
+async function wifiDevice() {
+  if (wifiPort) return wifiPort;
+  const out = await run('networksetup', ['-listallhardwareports']);
+  const m = out.match(/Hardware Port: (?:Wi-Fi|AirPort)\s*\nDevice: (\S+)/);
+  wifiPort = m ? m[1] : 'en0';
+  return wifiPort;
+}
+
+/* A picture for the model: shrunk to a size it reads well, as JPEG. */
+async function imageFor(file) {
+  const tmp = path.join(os.tmpdir(), `jelly-${process.pid}-${Date.now()}.jpg`);
+  await run('sips', ['-Z', '1568', '-s', 'format', 'jpeg', '-s', 'formatOptions', '70', file, '--out', tmp]);
+  const data = fs.readFileSync(tmp).toString('base64');
+  fs.rmSync(tmp, { force: true });
+  return { media_type: 'image/jpeg', data };
+}
+
+function musicApp(pref) {
+  if (pref === 'Spotify' || pref === 'Music') return pref;
+  return fs.existsSync('/Applications/Spotify.app') ? 'Spotify' : 'Music';
+}
 
 /* Local time, the way the user reads their clock: "2026-10-08T11:43". */
 const stamp = (d) => {
@@ -412,6 +443,331 @@ const TOOLS = [
     label: () => 'Copying to the clipboard',
     check: (i) => (typeof i.text === 'string' ? null : 'text is required'),
     async run(i) { clipboard.writeText(i.text); return { copied: i.text.length }; },
+  },
+
+  // ── Power ───────────────────────────────────────────────────────────────
+  {
+    name: 'sleep_mac',
+    description: 'Put the Mac to sleep, now or after some minutes.',
+    input_schema: { type: 'object', properties: { in_minutes: { type: 'number', minimum: 0, maximum: 720 } }, additionalProperties: false },
+    label: (i) => (i.in_minutes ? `Sleep in ${mins(i.in_minutes)}` : 'Going to sleep'),
+    check: () => null,
+    async run(i) {
+      const later = Math.max(0, i.in_minutes || 0);
+      // A moment's grace even "now", so the reply can be read first.
+      setTimeout(() => run('pmset', ['sleepnow']).catch(() => {}), later ? later * 60000 : 2500);
+      return { sleeping: later ? `in ${mins(later)}` : 'now' };
+    },
+  },
+  {
+    name: 'lock_screen',
+    description: 'Lock the Mac right away (the user will need their password or Touch ID to come back).',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    label: () => 'Locking the screen',
+    check: () => null,
+    async run() {
+      await new Promise(r => setTimeout(r, 1200));
+      try {
+        await osa('tell application "System Events" to keystroke "q" using {control down, command down}');
+        return { locked: true };
+      } catch {
+        // Without Accessibility access: turning the display off locks it on
+        // a Mac set to ask for the password straight away.
+        await run('pmset', ['displaysleepnow']);
+        return { locked: 'display off', note: 'For a real lock, allow Sticky Jelly in System Settings › Privacy & Security › Accessibility.' };
+      }
+    },
+  },
+  {
+    name: 'display_off',
+    description: 'Turn the display off without putting the Mac to sleep (music keeps playing).',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    label: () => 'Turning the display off',
+    check: () => null,
+    async run() {
+      setTimeout(() => run('pmset', ['displaysleepnow']).catch(() => {}), 1500);
+      return { done: true };
+    },
+  },
+  {
+    name: 'restart_or_shut_down',
+    description: 'Restart or shut down the Mac, now or after some minutes. Apps are asked to quit normally, so unsaved work prompts as usual. The user approves it first.',
+    input_schema: {
+      type: 'object',
+      properties: { action: { type: 'string', enum: ['restart', 'shut_down'] }, in_minutes: { type: 'number', minimum: 0, maximum: 720 } },
+      required: ['action'], additionalProperties: false,
+    },
+    label: (i) => (i.action === 'restart' ? 'Restarting' : 'Shutting down'),
+    check: (i) => (i.action === 'restart' || i.action === 'shut_down' ? null : 'action must be restart or shut_down'),
+    async run(i, { confirm }) {
+      const verb = i.action === 'restart' ? 'Restart' : 'Shut down';
+      const when = i.in_minutes ? `in ${mins(i.in_minutes)}` : 'now';
+      const ok = await confirm({ title: `${verb} your Mac`, lines: [{ from: verb, to: when }], action: verb });
+      if (!ok) return { declined: true, note: 'The user chose not to.' };
+      const go = () => osa(`tell application "System Events" to ${i.action === 'restart' ? 'restart' : 'shut down'}`).catch(() => {});
+      setTimeout(go, i.in_minutes ? i.in_minutes * 60000 : 2500);
+      return { scheduled: when, note: 'Only while Sticky Jelly keeps running.' };
+    },
+  },
+
+  // ── The Mac's state ─────────────────────────────────────────────────────
+  {
+    name: 'system_status',
+    description: 'How the Mac is doing: battery (percent, charging, time left), Wi-Fi (on/off and network), free disk space, volume.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    label: () => 'Checking the Mac',
+    check: () => null,
+    async run() {
+      const out = {};
+      try {
+        const b = await run('pmset', ['-g', 'batt']);
+        const m = b.match(/(\d+)%;\s*([^;]+);\s*([^\n]*)/);
+        if (m) out.battery = { percent: +m[1], state: m[2].trim(), remaining: m[3].replace(/present: true/, '').trim() || undefined };
+        else out.battery = 'none (a desktop Mac)';
+      } catch { /* no battery info */ }
+      try {
+        const dev = await wifiDevice();
+        out.wifi = { on: /On$/m.test(await run('networksetup', ['-getairportpower', dev])) };
+        const net = await run('networksetup', ['-getairportnetwork', dev]).catch(() => '');
+        const name = net.match(/Current Wi-Fi Network: (.+)/);
+        if (name) out.wifi.network = name[1].trim();
+      } catch { /* no Wi-Fi */ }
+      try {
+        const df = (await run('df', ['-k', '/System/Volumes/Data'])).trim().split('\n').pop().split(/\s+/);
+        out.disk = { freeGB: Math.round(+df[3] / 1024 / 1024), usedPercent: df[4] };
+      } catch { /* skip */ }
+      try { out.volume = +(await osa('output volume of (get volume settings)')).trim(); } catch { /* skip */ }
+      return out;
+    },
+  },
+  {
+    name: 'set_wifi',
+    description: 'Turn Wi-Fi on or off.',
+    input_schema: { type: 'object', properties: { on: { type: 'boolean' } }, required: ['on'], additionalProperties: false },
+    label: (i) => (i.on ? 'Wi-Fi on' : 'Wi-Fi off'),
+    check: (i) => (typeof i.on === 'boolean' ? null : 'on is required'),
+    async run(i) {
+      try { await run('networksetup', ['-setairportpower', await wifiDevice(), i.on ? 'on' : 'off']); }
+      catch (e) { return { error: e.message }; }
+      return { wifi: i.on ? 'on' : 'off' };
+    },
+  },
+
+  // ── Music ───────────────────────────────────────────────────────────────
+  {
+    name: 'music',
+    description: 'Control Spotify or Apple Music: play, pause, next, previous, what is playing, or find something to play by name, artist or playlist (search).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['play', 'pause', 'next', 'previous', 'now_playing', 'search'] },
+        query: { type: 'string', description: 'For search: a song, artist, album, playlist or mood.' },
+        app: { type: 'string', enum: ['Spotify', 'Music'], description: 'Leave out to use Spotify if installed, else Apple Music.' },
+      },
+      required: ['action'], additionalProperties: false,
+    },
+    label: (i) => ({ play: 'Playing', pause: 'Pausing', next: 'Next track', previous: 'Previous track', now_playing: "Checking what's playing", search: `Finding “${i.query || 'music'}”` }[i.action] || 'Music'),
+    check: (i) => (i.action === 'search' && !str(i.query) ? 'search needs a query' : null),
+    async run(i) {
+      const appName = musicApp(i.app);
+      const cmd = { play: 'play', pause: 'pause', next: 'next track', previous: 'previous track' }[i.action];
+      try {
+        if (cmd) {
+          await osa(`tell application "${appName}" to ${cmd}`);
+          return { done: i.action, app: appName };
+        }
+        if (i.action === 'now_playing') {
+          const out = await osa(`tell application "${appName}"\nif player state is playing then\nreturn (name of current track) & " — " & (artist of current track)\nelse\nreturn "nothing playing"\nend if\nend tell`);
+          return { app: appName, now_playing: out.trim() };
+        }
+        // search
+        if (appName === 'Spotify') {
+          await shell.openExternal(`spotify:search:${encodeURIComponent(i.query)}`);
+          return { app: 'Spotify', note: 'Opened the Spotify search; the user picks what to play.' };
+        }
+        const out = await osa(`set q to item 1 of argv
+tell application "Music"
+  set hits to (every playlist whose name contains q)
+  if hits is not {} then
+    play item 1 of hits
+    return "playlist: " & name of item 1 of hits
+  end if
+  set hits to (every track of library playlist 1 whose name contains q or artist contains q or album contains q)
+  if hits is not {} then
+    play item 1 of hits
+    return "track: " & (name of item 1 of hits) & " — " & (artist of item 1 of hits)
+  end if
+  return "not found"
+end tell`, i.query);
+        return { app: 'Music', result: out.trim() };
+      } catch (e) {
+        return { error: `${appName}: ${e.message.split('\n')[0]}` };
+      }
+    },
+  },
+
+  // ── Notes and drafts ────────────────────────────────────────────────────
+  {
+    name: 'add_note',
+    description: 'Save a note in Apple Notes. The user approves it first.',
+    input_schema: {
+      type: 'object',
+      properties: { title: { type: 'string' }, body: { type: 'string' } },
+      required: ['title', 'body'], additionalProperties: false,
+    },
+    label: () => 'Saving a note',
+    check: (i) => (str(i.title) && typeof i.body === 'string' ? null : 'title and body are required'),
+    async run(i, { confirm }) {
+      const ok = await confirm({ title: 'Save to Notes', lines: [{ from: i.title, to: `${i.body.slice(0, 60)}${i.body.length > 60 ? '…' : ''}` }], action: 'Save it' });
+      if (!ok) return { declined: true, note: 'The user chose not to save it.' };
+      const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const html = `<h1>${esc(i.title)}</h1>${esc(i.body).split('\n').map(l => `<div>${l || '<br>'}</div>`).join('')}`;
+      try { await osa('tell application "Notes" to make new note with properties {body:item 1 of argv}', html); }
+      catch (e) { return { error: /not allowed|-1743/i.test(e.message) ? 'macOS needs permission for Sticky Jelly to use Notes (System Settings › Privacy & Security › Automation).' : e.message }; }
+      return { saved: i.title };
+    },
+  },
+  {
+    name: 'draft_email',
+    description: 'Open a new email draft in the user\'s mail app with the recipient, subject and body filled in. It is never sent — the user sends it.',
+    input_schema: {
+      type: 'object',
+      properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } },
+      required: ['subject', 'body'], additionalProperties: false,
+    },
+    label: () => 'Drafting an email',
+    check: (i) => (typeof i.subject === 'string' && typeof i.body === 'string' ? null : 'subject and body are required'),
+    async run(i) {
+      const q = new URLSearchParams({ subject: i.subject, body: i.body }).toString().replace(/\+/g, '%20');
+      await shell.openExternal(`mailto:${encodeURIComponent(i.to || '').replace(/%40/g, '@')}?${q}`);
+      return { drafted: true, note: 'Draft opened; not sent.' };
+    },
+  },
+  {
+    name: 'draft_message',
+    description: 'Prepare a message for Messages: the text goes on the clipboard and Messages opens (to the person, if a phone number or email is given) for the user to paste and send. It is never sent automatically.',
+    input_schema: {
+      type: 'object',
+      properties: { to: { type: 'string', description: 'Phone number or email, if known.' }, text: { type: 'string' } },
+      required: ['text'], additionalProperties: false,
+    },
+    label: () => 'Preparing a message',
+    check: (i) => (typeof i.text === 'string' && i.text.length ? null : 'text is required'),
+    async run(i) {
+      clipboard.writeText(i.text);
+      if (str(i.to) && /^[+\d\s()-]{5,}$|@/.test(i.to)) await shell.openExternal(`imessage://${encodeURIComponent(i.to.replace(/\s/g, '')).replace(/%40/g, '@')}`);
+      else await run('open', ['-a', 'Messages']);
+      return { copied: true, note: 'The text is on the clipboard; Messages is open. The user pastes and sends it.' };
+    },
+  },
+
+  // ── Seeing ──────────────────────────────────────────────────────────────
+  {
+    name: 'look_at_screen',
+    description: 'Take a screenshot of the main display and look at it, to explain, summarise or help with what the user is looking at. The user approves it each time.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false },
+    label: () => 'Looking at your screen',
+    check: () => null,
+    async run(_i, { confirm, hidden }) {
+      const ok = await confirm({ title: 'Look at your screen?', lines: [{ from: 'A screenshot of your main display', to: 'sent to the assistant' }], action: 'Show it' });
+      if (!ok) return { declined: true, note: 'The user chose not to share their screen.' };
+      if (systemPreferences.getMediaAccessStatus('screen') === 'denied') {
+        return { error: 'Sticky Jelly needs Screen Recording permission: System Settings › Privacy & Security › Screen & System Audio Recording, then restart Sticky Jelly.' };
+      }
+      const file = path.join(os.tmpdir(), `jelly-screen-${process.pid}.png`);
+      // The jelly steps out of the picture while it is taken.
+      const take = () => run('screencapture', ['-x', '-m', '-t', 'png', file]);
+      if (hidden) await hidden(take); else await take();
+      try { return { image: await imageFor(file), note: 'This is the user\'s screen right now.' }; }
+      finally { fs.rmSync(file, { force: true }); }
+    },
+  },
+  {
+    name: 'read_file',
+    description: 'Read a file inside the home folder so you can summarise it, answer questions about it or use it: text and code, PDF, Word/RTF/HTML documents, and images (which you see).',
+    input_schema: {
+      type: 'object',
+      properties: { path: { type: 'string' }, max_chars: { type: 'integer', minimum: 1000, maximum: 120000 } },
+      required: ['path'], additionalProperties: false,
+    },
+    label: (i) => `Reading ${path.basename(i.path || '')}`,
+    check: (i) => (str(i.path) ? null : 'path is required'),
+    async run(i) {
+      const p = resolveHome(i.path);
+      if (!p || !insideHome(p) || inLibrary(p)) return { error: 'Only files inside your home folder (not Library).' };
+      if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) return { error: `No file at ${pretty(p)}.` };
+      const ext = path.extname(p).slice(1).toLowerCase();
+      const limit = i.max_chars || 60000;
+      const clip = (t) => ({ file: pretty(p), text: t.slice(0, limit), truncated: t.length > limit || undefined, chars: t.length });
+      try {
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tiff', 'bmp'].includes(ext)) return { file: pretty(p), image: await imageFor(p) };
+        if (ext === 'pdf') {
+          const t = await jxa("ObjC.import('PDFKit'); const d = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0])); return d.isNil() ? '' : ObjC.unwrap(d.string);", p);
+          return t.trim() ? clip(t) : { file: pretty(p), error: 'No text in this PDF (it may be scanned images).' };
+        }
+        if (['doc', 'docx', 'rtf', 'rtfd', 'odt', 'html', 'htm', 'webarchive', 'wordml'].includes(ext)) {
+          return clip(await run('textutil', ['-convert', 'txt', '-stdout', p]));
+        }
+        if (fs.statSync(p).size > 4 * 1024 * 1024) return { error: 'That file is too big to read here.' };
+        const t = fs.readFileSync(p, 'utf8');
+        if (t.includes('\u0000')) return { error: "That isn't a text file I can read." };
+        return clip(t);
+      } catch (e) { return { error: e.message.split('\n')[0] }; }
+    },
+  },
+
+  // ── The jelly's own time ────────────────────────────────────────────────
+  {
+    name: 'focus_timer',
+    description: 'Start a focus session (Pomodoro): the jelly slowly gets sleepier as the time runs out, then bounces and starts the break; notifications mark both ends.',
+    input_schema: {
+      type: 'object',
+      properties: { minutes: { type: 'number', minimum: 1, maximum: 180 }, break_minutes: { type: 'number', minimum: 0, maximum: 60 }, label: { type: 'string' } },
+      additionalProperties: false,
+    },
+    label: (i) => `Focus for ${mins(i.minutes || 25)}`,
+    check: () => null,
+    async run(i, { focus }) {
+      if (!focus) return { error: 'Not available.' };
+      const ends = focus(i.minutes || 25, i.break_minutes ?? 5, i.label || '');
+      return { focusing: true, ends };
+    },
+  },
+  {
+    name: 'jelly_away',
+    description: 'Hide the jelly itself for a while (do not disturb); it comes back on its own, or from its menu-bar icon.',
+    input_schema: { type: 'object', properties: { minutes: { type: 'number', minimum: 1, maximum: 1440 } }, required: ['minutes'], additionalProperties: false },
+    label: (i) => `Away for ${mins(i.minutes)}`,
+    check: (i) => (typeof i.minutes === 'number' ? null : 'minutes is required'),
+    async run(i, { away }) {
+      if (!away) return { error: 'Not available.' };
+      return { away: true, back: away(i.minutes) };
+    },
+  },
+  {
+    name: 'watch_folder',
+    description: 'From now on, automatically tidy NEW files that land in a folder (like Downloads) into subfolders by type: Images, Documents, Videos, Audio, Archives, Installers, Code. Existing files are left alone (use organize_files for those). Set stop to true to stop watching. The user approves it first.',
+    input_schema: {
+      type: 'object',
+      properties: { path: { type: 'string' }, stop: { type: 'boolean' } },
+      required: ['path'], additionalProperties: false,
+    },
+    label: (i) => (i.stop ? `Stop tidying ${path.basename(i.path || '')}` : `Tidying ${path.basename(i.path || '')}`),
+    check: (i) => (str(i.path) ? null : 'path is required'),
+    async run(i, { confirm, watch }) {
+      if (!watch) return { error: 'Not available.' };
+      const p = resolveHome(i.path);
+      if (!p || !insideHome(p) || inLibrary(p) || p === HOME) return { error: 'Only a folder inside your home folder (not Library, not home itself).' };
+      if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) return { error: `No folder at ${pretty(p)}.` };
+      if (i.stop) return { watching: watch.stop(p) };
+      const ok = await confirm({
+        title: `Keep ${pretty(p)} tidy`,
+        lines: [{ from: 'New images, documents, videos…', to: `${pretty(p)}/Images, /Documents, …` }, { from: 'Existing files', to: 'left where they are' }],
+        action: 'Keep it tidy',
+      });
+      if (!ok) return { declined: true, note: 'The user chose not to.' };
+      return { watching: watch.start(p) };
+    },
   },
 ];
 
